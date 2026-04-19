@@ -3,7 +3,7 @@
   <h1>traccia</h1>
 </div>
 
-<p align="center">build a local skill graph from your own archive. keep the evidence, keep the timestamps, keep the raw files untouched.</p>
+<p align="center">turn your own archive into an evidence-backed skill graph. keep the raw files, keep the timestamps, keep the reasoning inspectable.</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12%2B-000000?style=flat-square" alt="python badge">
@@ -15,182 +15,152 @@
 
 ---
 
-`traccia` ingests notes, code, docs, AI chats, and platform exports one file at a time, extracts grounded evidence, and turns that into a videogame-style skill tree with explainable levels, freshness, acquisition timing, and graph exports.
+`traccia` turns personal archives into a skill graph that can explain itself. feed it notes, code, docs, AI chats, exported platform data, and the usual pile of half-structured personal history. it keeps the source files untouched, extracts evidence with timestamps, and renders a graph that shows where a skill came from, how deep it looks, how current it is, and how central it is to the broader archive.
 
-this is not a resume parser and not a generic personal wiki. the primary artifact is the skill graph.
+the project is built for mixed archives rather than one clean source of truth. that includes repo history, reddit exports, google activity, social profiles, AI conversation logs, and everything else that tends to accumulate around a real person over time. the point is not to pretend those signals mean the same thing. `traccia` keeps weak signals weak, strong evidence strong, and the trail visible enough to challenge later.
+
+[spec](SPEC.md) | [plan](PLAN.md) | [decisions](decisions.md) | [references](REFERENCES.md)
 
 ## why
 
-most personal knowledge tools keep the files but lose the skill story.
+most archive tools are good at storing material and bad at telling the skill story. most profile tools do the opposite. they compress everything into a pitch, flatten uncertainty, and throw away the evidence trail that would let you inspect the claim later.
 
-most resume tools flatten the story into a pitch and throw away the evidence.
+`traccia` is trying to keep both sides intact. the files stay raw. the evidence is extracted one source at a time. the graph records when a skill first appeared, when it likely crossed from ambient interest into learned capability, and when there was strong enough proof to treat it as demonstrated work. that makes the output more useful for reflection, review, and long-range memory than a resume-shaped summary.
 
-`traccia` sits in the middle:
+## install
 
-- keep raw sources immutable
-- infer skills from evidence instead of vibes
-- separate weak signals from real demonstrated work
-- show when a skill first appeared, when it was learned, and when it was first strongly demonstrated
-- let the graph decay, strengthen, or stay historical as the archive changes
-- export to markdown, json, a local viewer, and an obsidian-friendly vault
+`traccia` already ships a real console script. `uv run traccia ...` works from the repo, but it is not the only way to use it.
 
-## quickstart
+| path | command | result |
+| --- | --- | --- |
+| repo-local workflow | `uv sync` | keeps `uv run traccia ...` available inside the project |
+| bare `traccia` command with live local edits | `uv tool install -e .` | installs the console script on your `PATH` in editable mode |
+| standard editable install without `uv tool` | `pip install -e .` | installs the same console script through pip |
 
-requires python 3.12+ and `uv`.
+if you just want the shortest path from a clone, use the editable tool install once and then call `traccia` directly.
+
+## first run
 
 ```bash
-uv sync
-
-# initialize a traccia project
-uv run traccia init my-traccia
-
-# ingest a corpus into that project
-uv run traccia ingest-dir /path/to/corpus --project-root my-traccia
-
-# inspect the result
-uv run traccia tree --project-root my-traccia
-uv run traccia explain python --project-root my-traccia
-uv run traccia review --project-root my-traccia
-
-# export projections
-uv run traccia export obsidian --project-root my-traccia
-uv run traccia viewer --project-root my-traccia
+uv tool install -e .
+traccia init my-traccia
+traccia ingest-dir /path/to/archive --project-root my-traccia
+traccia tree --project-root my-traccia
+traccia explain python --project-root my-traccia
+traccia review --project-root my-traccia
+traccia export obsidian --project-root my-traccia
+traccia viewer --project-root my-traccia
 ```
 
-for local deterministic testing, switch the generated config to:
+for deterministic local testing, switch the generated config to:
 
 ```yaml
 backend:
   provider: fake
 ```
 
-for a live model, the default path is an openai-style `/v1/chat/completions` backend:
+for a live model, the current backend contract is an openai-style `v1/chat/completions` endpoint:
 
 ```yaml
 backend:
   provider: openai_compatible
-  model: gpt-4o-2024-08-06
+  model: gpt-5-chat-latest
   api_key_env: OPENAI_API_KEY
   base_url: https://api.openai.com/v1
   api_style: chat_completions
   structured_output_mode: json_schema
 ```
 
-this is openai-style, not openai-only. any provider with a compatible endpoint can be used by changing `base_url`, `model`, and `api_key_env`.
+this is openai-style, not openai-only. any provider that clones the same request and response shape can be used by swapping `base_url`, `model`, and `api_key_env`. the current implementation deliberately targets `chat_completions` because it remains the most commonly copied interface across hosted and self-hosted providers, even if some vendors now prefer newer APIs for their own stacks. for OpenAI specifically, the example uses `gpt-5-chat-latest` because it is a current chat-capable alias that still matches the endpoint this repo implements today.
 
-## what it ships right now
+## backend surface
 
-- immutable source intake into `raw/imported/`
-- file-by-file parsing with span tracking
-- broad source classification across authored content, produced artifacts, platform activity, social/community traces, and AI dialogue
-- evidence extraction with signal classes such as `artifact_backed_work`, `problem_solving_trace`, `self_presentation`, and `ambient_interest`
-- canonical skill nodes plus review queue for uncertain creation
-- person-specific skill state with:
-  - level
-  - confidence
-  - freshness
-  - historical peak
-  - first seen
-  - first learned
-  - first strong evidence
-  - estimated acquisition time and basis
-  - core-self centrality
-- rendered markdown node pages and profile exports
-- `graph.json`, `tree.json`, ascii tree output, and a local static viewer
-- obsidian vault export with real note generation instead of a raw folder dump
+| key | example | meaning |
+| --- | --- | --- |
+| `provider` | `openai_compatible` | live LLM backend that speaks an OpenAI-style HTTP contract |
+| `model` | `gpt-5-chat-latest` | current chat-capable example model id; replace it with any compatible model your provider exposes |
+| `api_key_env` | `OPENAI_API_KEY` | environment variable that holds the credential |
+| `base_url` | `https://api.openai.com/v1` | root URL for the compatible endpoint |
+| `api_style` | `chat_completions` | the only live API style supported right now |
+| `structured_output_mode` | `json_schema` | primary structured-output mode; `json_object` is also supported |
+
+## what it does today
+
+the current build already handles immutable source intake into `raw/imported/`, file-by-file parsing with span tracking, source classification across authored material and activity traces, and evidence extraction that tries to separate real work from ambient interest. the graph layer creates canonical skill nodes, keeps a review queue for uncertain additions, and stores person-specific state such as level, confidence, freshness, historical peak, first seen, first learned, first strong evidence, estimated acquisition timing, acquisition basis, and core-self centrality.
+
+the rendering side produces markdown node pages, profile exports, `graph.json`, `tree.json`, an ascii tree, a local static viewer, and an obsidian vault export with actual note generation instead of a dead folder dump.
 
 ## input surface
 
-`traccia` is built for mixed personal archives, not just project repos.
+`traccia` is aimed at mixed personal archives, not just project repos. the current input shape looks like this:
 
-current supported file types:
+| source class | examples | current treatment |
+| --- | --- | --- |
+| authored material | markdown, plain text, docs, notes, READMEs | parsed directly and cited back with spans where possible |
+| code and technical artifacts | python, js, ts, tsx, rust, go, sql | treated as stronger evidence when they show actual implementation work |
+| structured exports | json, csv, pdf, docx | parsed into document records and evidence candidates |
+| activity exports | AI conversation JSON, reddit JSON, google activity JSON | normalized into a common structure before evidence extraction |
+| broader archive direction | social profiles, issue trackers, twitter or x exports, more takeout-style dumps | explicitly in scope for future expansion, but not all implemented yet |
 
-- markdown
-- plain text
-- python, js, ts, tsx, rust, go, sql
-- json
-- csv
-- pdf
-- docx
-
-current structured normalization includes:
-
-- AI conversation json exports
-- reddit json exports
-- google activity json exports
-
-the intended archive boundary is wider than that. the system is meant to grow toward reddit, google takeout, twitter/x, social profiles, issue trackers, and broader activity exports without treating every signal as equal proof of skill.
+the intended archive boundary is wider than the current parser list. the system is meant to grow toward bigger archive imports without treating every interaction as equal proof of competence.
 
 ## output surface
 
-after ingest, `traccia` renders:
+after ingest, `traccia` renders a graph plus several practical projections around it:
 
-- `tree/index.md`
-- `tree/nodes/*.md`
-- `tree/log.md`
-- `graph/graph.json`
-- `graph/tree.json`
-- `profile/skill.md`
-- `viewer/index.html`
-- `exports/obsidian/`
+| artifact | purpose |
+| --- | --- |
+| `tree/index.md` | top-level skill tree snapshot |
+| `tree/nodes/*.md` | per-skill pages with evidence, timestamps, related skills, and reasoning |
+| `tree/log.md` | render log and longitudinal notes |
+| `graph/graph.json` | full graph export for tooling |
+| `graph/tree.json` | simplified tree projection |
+| `profile/skill.md` | profile-style summary built from the graph |
+| `viewer/index.html` | local static viewer |
+| `exports/obsidian/` | obsidian-friendly note graph export |
 
-each skill node is meant to answer:
-
-- where it fits in the graph
-- what evidence supports it
-- how deep the demonstrated competence is
-- how current it is
-- when it first showed up
-- when it seems to have been learned or acquired
-- how central it is to the broader archive
+each skill node is meant to answer the questions that normal profile tools dodge. where does this skill fit. what evidence supports it. how deep does the work look. how current is it. when did it first show up. when does it look learned rather than merely noticed. when was there strong enough evidence to trust it. how tightly does it connect back into the rest of the self-model.
 
 ## scoring stance
 
-`traccia` explicitly separates:
+`traccia` keeps current mastery and core-self centrality separate on purpose. those are related, but they are not the same thing. a skill can be central because it keeps showing up across the archive while still being shallow. another skill can be deep but narrow because it only appears in one intense period of work.
 
-- **current mastery**: how deep the demonstrated competence is right now
-- **core-self centrality**: how recurrent or foundational the skill is across the archive
-
-that matters because platform exports create a lot of weak signals.
-
-searches, follows, bios, bookmarks, and lightweight AI chats can support interest or context. they should not inflate mastery on their own.
+that separation matters once you ingest noisy exports. searches, follows, bios, bookmarks, lightweight chats, and stray mentions can support interest, context, or identity. on their own they should not inflate mastery. the system is designed to preserve those lighter signals without letting them pretend to be authored work or repeat implementation evidence.
 
 ## command surface
 
-main commands:
+the full command list lives behind `traccia --help`, but the current working surface is already broad enough to use day to day:
 
-- `traccia init`
-- `traccia doctor`
-- `traccia ingest`
-- `traccia ingest-dir`
-- `traccia rebuild`
-- `traccia tree`
-- `traccia explain`
-- `traccia evidence`
-- `traccia review`
-- `traccia lock`
-- `traccia hide`
-- `traccia stats`
-- `traccia export graph`
-- `traccia export profile`
-- `traccia export skill-md`
-- `traccia export obsidian`
+| command | use |
+| --- | --- |
+| `traccia init` | scaffold a new project |
+| `traccia doctor` | verify the scaffold and backend config |
+| `traccia ingest` / `traccia ingest-dir` | import files into the graph pipeline |
+| `traccia rebuild` | recompute the graph from stored material |
+| `traccia tree` | print the current tree |
+| `traccia explain` / `traccia why` | inspect one skill node |
+| `traccia evidence` | list evidence connected to a skill |
+| `traccia review` | process uncertain graph changes |
+| `traccia alias` | manage canonical aliases |
+| `traccia export ...` | write graph, profile, markdown, and obsidian projections |
 
 ## repo map
 
-- `SPEC.md` - product and architecture spec
-- `PLAN.md` - implementation plan and phase boundaries
-- `decisions.md` - decisions and research conclusions
-- `REFERENCES.md` - inspirations and anti-references
-- `src/traccia/` - implementation
-- `tests/` - fixtures and regression coverage
+| path | purpose |
+| --- | --- |
+| `SPEC.md` | product and architecture spec |
+| `PLAN.md` | implementation plan and phase boundaries |
+| `decisions.md` | decisions and research conclusions |
+| `REFERENCES.md` | inspirations and anti-references |
+| `src/traccia/` | implementation |
+| `tests/` | fixtures and regression coverage |
 
 ## verification
 
-current repo verification is green with:
+the current repo verification path is:
 
 ```bash
 uv run pytest -q
 ```
 
-the live external backend path was not verified against a real provider in this workspace state unless you supply credentials and point the config at one.
+the live external backend path still depends on real credentials and a reachable compatible endpoint. nothing in this README assumes OpenAI specifically. it assumes an OpenAI-style contract.

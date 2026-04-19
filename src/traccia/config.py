@@ -49,7 +49,7 @@ class RenderingConfig(TracciaModel):
 
 class BackendConfig(TracciaModel):
     provider: str = "openai_compatible"
-    model: str = "gpt-4o-2024-08-06"
+    model: str = "gpt-5-chat-latest"
     api_key_env: str = "OPENAI_API_KEY"
     base_url: str = "https://api.openai.com/v1"
     api_style: str = "chat_completions"
