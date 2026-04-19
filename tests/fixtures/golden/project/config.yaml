@@ -1,0 +1,31 @@
+schema_version: 1
+project_name: fixture-traccia
+paths:
+  raw_inbox: raw/inbox
+  raw_imported: raw/imported
+  parsed: parsed
+  evidence: evidence
+  graph: graph
+  viewer: viewer
+  tree: tree
+  profile: profile
+  state: state
+  exports: exports
+pipeline:
+  parser_version: phase-0
+  extractor_version: phase-0
+  canonicalizer_version: phase-0
+  scorer_version: phase-0
+  renderer_version: phase-0
+thresholds:
+  strong_evidence_auto_create: 0.9
+  review_confidence_floor: 0.6
+  consumption_max_level: 2
+privacy:
+  default_sensitivity: private
+  redact_source_paths_in_exports: true
+  allow_raw_excerpt_export: false
+rendering:
+  default_tree_format: ascii
+  enable_obsidian_export: true
+  enable_viewer_bundle: true

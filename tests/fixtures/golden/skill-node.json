@@ -1,0 +1,15 @@
+{
+  "skill_id": "skill.python-cli-tooling",
+  "kind": "skill",
+  "name": "Python CLI tooling",
+  "slug": "python-cli-tooling",
+  "aliases": [
+    "Python command-line apps",
+    "CLI tooling"
+  ],
+  "description": "Building Python command-line tools with clear operational contracts.",
+  "taxonomy_refs": [],
+  "status": "active",
+  "created_by": "fixture",
+  "last_updated": "2026-04-19T14:30:00Z"
+}

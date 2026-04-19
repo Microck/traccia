@@ -1,0 +1,17 @@
+{
+  "source_id": "src_repo_readme",
+  "uri": "file:///fixtures/sample-source.md",
+  "source_type": "markdown",
+  "source_category": "authored_content",
+  "parser": "markdown-it",
+  "sha256": "5d41402abc4b2a76b9719d911017c592",
+  "created_at": "2026-04-01T12:00:00Z",
+  "ingested_at": "2026-04-19T14:30:00Z",
+  "title": "CLI project README",
+  "language": "en",
+  "sensitivity": "private",
+  "metadata": {
+    "authoring_mode": "authored"
+  },
+  "status": "active"
+}

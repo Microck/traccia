@@ -1,0 +1,8 @@
+{
+  "config_path": "project/config.yaml",
+  "source_document_path": "source-document.json",
+  "evidence_item_path": "evidence-item.json",
+  "skill_node_path": "skill-node.json",
+  "person_skill_state_path": "person-skill-state.json",
+  "sample_source_text_path": "sample-source.md"
+}

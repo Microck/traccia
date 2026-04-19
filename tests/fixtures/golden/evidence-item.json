@@ -1,0 +1,21 @@
+{
+  "evidence_id": "ev_repo_readme_python_cli",
+  "source_id": "src_repo_readme",
+  "span_start": 0,
+  "span_end": 142,
+  "quote": "Built a Python CLI that parses markdown docs and exports explainable JSON artifacts.",
+  "evidence_type": "implemented",
+  "signal_class": "artifact_backed_work",
+  "skill_candidates": [
+    "Python",
+    "CLI tooling",
+    "Markdown parsing"
+  ],
+  "artifact_candidates": [
+    "command-line application"
+  ],
+  "time_reference": "2026-04-01",
+  "reliability": "tier_a",
+  "extractor_version": "phase-0",
+  "confidence": 0.93
+}
