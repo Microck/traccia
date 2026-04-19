@@ -3,15 +3,11 @@
   <h1>traccia</h1>
 </div>
 
-<p align="center">turn your own archive into an evidence-backed skill graph. keep the raw files, keep the timestamps, keep the reasoning inspectable.</p>
-
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12%2B-000000?style=flat-square" alt="python badge">
-  <img src="https://img.shields.io/badge/interface-typer-000000?style=flat-square" alt="typer badge">
-  <img src="https://img.shields.io/badge/backend-openai--compatible-000000?style=flat-square" alt="backend badge">
-  <img src="https://img.shields.io/badge/mode-local--first-000000?style=flat-square" alt="local first badge">
   <img src="https://img.shields.io/badge/license-MIT-000000?style=flat-square" alt="mit license badge">
 </p>
+
 
 ---
 
