@@ -13,9 +13,7 @@
 
 `traccia` turns personal archives into a skill graph that can explain itself. feed it notes, code, docs, AI chats, exported platform data, and the usual pile of half-structured personal history. it keeps the source files untouched, extracts evidence with timestamps, and renders a graph that shows where a skill came from, how deep it looks, how current it is, and how central it is to the broader archive.
 
-the project is built for mixed archives rather than one clean source of truth. that includes repo history, reddit exports, google activity, social profiles, AI conversation logs, and everything else that tends to accumulate around a real person over time. the point is not to pretend those signals mean the same thing. `traccia` keeps weak signals weak, strong evidence strong, and the trail visible enough to challenge later.
-
-[spec](SPEC.md) | [plan](PLAN.md) | [decisions](decisions.md) | [references](REFERENCES.md)
+the project is built for mixed archives rather than one clean source of truth. that includes repo history, google activity, social profiles, AI conversation logs, and everything else that tends to accumulate around a real person over time. the point is not to pretend those signals mean the same thing. `traccia` keeps weak signals weak, strong evidence strong, and the trail visible enough to challenge later.
 
 ## why
 
@@ -67,7 +65,7 @@ backend:
   structured_output_mode: json_schema
 ```
 
-this is openai-style, not openai-only. any provider that clones the same request and response shape can be used by swapping `base_url`, `model`, and `api_key_env`. the current implementation deliberately targets `chat_completions` because it remains the most commonly copied interface across hosted and self-hosted providers, even if some vendors now prefer newer APIs for their own stacks. for OpenAI specifically, the example uses `gpt-5-chat-latest` because it is a current chat-capable alias that still matches the endpoint this repo implements today.
+any provider that clones the same request and response shape can be used by swapping `base_url`, `model`, and `api_key_env`. the current implementation deliberately targets `chat_completions` because it remains the most commonly copied interface across hosted and self-hosted providers, even if some vendors now prefer newer APIs for their own stacks.
 
 ## backend surface
 
@@ -160,3 +158,7 @@ uv run pytest -q
 ```
 
 the live external backend path still depends on real credentials and a reachable compatible endpoint. nothing in this README assumes OpenAI specifically. it assumes an OpenAI-style contract.
+
+## license
+
+mit
