@@ -65,7 +65,7 @@ backend:
   structured_output_mode: json_schema
 ```
 
-any provider that clones the same request and response shape can be used by swapping `base_url`, `model`, and `api_key_env`. the current implementation deliberately targets `chat_completions` because it remains the most commonly copied interface across hosted and self-hosted providers, even if some vendors now prefer newer APIs for their own stacks. for OpenAI specifically, the example uses `gpt-5-chat-latest` because it is a current chat-capable alias that still matches the endpoint this repo implements today.
+any provider that clones the same request and response shape can be used by swapping `base_url`, `model`, and `api_key_env`. the current implementation deliberately targets `chat_completions` because it remains the most commonly copied interface across hosted and self-hosted providers, even if some vendors now prefer newer APIs for their own stacks.
 
 ## backend surface
 
@@ -164,7 +164,6 @@ the live external backend path still depends on real credentials and a reachable
 ## automation
 
 github actions now handle the basic release path for the repo. pushes and pull requests run lint, tests, package builds, and a CLI smoke check. version tags matching `v*` build release artifacts and attach them to a github release. pypi publishing is wired for trusted publishing as an opt-in path, and only runs when the repository variable `PYPI_PUBLISH=true` is set and the repository has been registered as a trusted publisher on pypi.
-
 ## license
 
 mit
