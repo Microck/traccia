@@ -22,7 +22,7 @@ traccia = "traccia.cli:app"
 [dependency-groups]
 dev = [
   "pytest>=8.3,<9",
-  "ruff>=0.12,<1",
+  "ruff>=0.15.11,<1",
 ]
 
 [tool.hatch.build.targets.wheel]
