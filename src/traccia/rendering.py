@@ -687,7 +687,7 @@ def _write_obsidian_domain_notes(*, destination: Path, skill_rows: list[dict[str
             "",
             f"# {row['name']}",
             "",
-            f"- Back to [[Home]]",
+            "- Back to [[Home]]",
             "",
             "## Skills",
         ]
@@ -733,7 +733,7 @@ def _write_obsidian_skill_notes(
             f"# {row['name']}",
             "",
             f"- Domain: [[Domains/{_obsidian_note_name(domain_name)}|{domain_name}]]",
-            f"- Back to [[Home]]",
+            "- Back to [[Home]]",
             "",
             "## Timeline",
             f"- First seen: {row['first_seen_at'] or 'unknown'}",
@@ -867,7 +867,7 @@ def _write_obsidian_source_notes(
             "",
             f"# {title}",
             "",
-            f"- Back to [[Home]]",
+            "- Back to [[Home]]",
             f"- URI: `{row.get('uri') or ''}`",
             f"- Category: `{row.get('source_category') or ''}`",
         ]

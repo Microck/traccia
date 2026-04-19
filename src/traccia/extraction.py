@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from pathlib import Path
 
 from traccia.models import (
     EvidenceItem,
@@ -13,9 +12,8 @@ from traccia.models import (
     SourceCategory,
     SourceType,
 )
-from traccia.taxonomy import SKILL_BY_NAME, match_skill_names
+from traccia.taxonomy import match_skill_names
 from traccia.utils import short_hash
-
 
 ACTION_PATTERNS: list[tuple[EvidenceType, tuple[str, ...]]] = [
     (EvidenceType.DEBUGGED, ("debugged", "fixed", "resolved", "troubleshot")),

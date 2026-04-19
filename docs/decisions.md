@@ -1,4 +1,4 @@
-# Traccia Decisions Log
+# decisions
 
 This document records the planning conversation so far from start to finish, including the product clarifications, locked implementation decisions, and the GitHub reference research that followed.
 

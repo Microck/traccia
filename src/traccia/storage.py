@@ -6,7 +6,15 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from traccia.models import EvidenceItem, ParsedSpan, PersonSkillState, ReviewItem, SkillEdge, SkillNode, SourceDocument
+from traccia.models import (
+    EvidenceItem,
+    ParsedSpan,
+    PersonSkillState,
+    ReviewItem,
+    SkillEdge,
+    SkillNode,
+    SourceDocument,
+)
 
 
 class Storage:

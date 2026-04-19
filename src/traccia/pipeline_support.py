@@ -14,7 +14,6 @@ from traccia.models import (
 from traccia.taxonomy import SKILL_BY_NAME
 from traccia.utils import iso_now, skill_id, slugify
 
-
 PASSIVE_EVIDENCE_TYPES = {"mentioned", "self_claimed", "studied", "researched"}
 STRONG_SIGNAL_CLASSES = {"artifact_backed_work", "problem_solving_trace"}
 COMMUNITY_ACTION_TYPES = {"taught", "presented", "reviewed"}

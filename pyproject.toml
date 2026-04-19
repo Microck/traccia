@@ -22,6 +22,7 @@ traccia = "traccia.cli:app"
 [dependency-groups]
 dev = [
   "pytest>=8.3,<9",
+  "ruff>=0.12,<1",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -29,3 +30,10 @@ packages = ["src/traccia"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["F", "I"]

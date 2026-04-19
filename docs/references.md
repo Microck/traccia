@@ -1,4 +1,4 @@
-# REFERENCES.md
+# references
 
 ## Baseline references you already pointed to
 

@@ -1,4 +1,4 @@
-# SPEC.md
+# spec
 
 ## 1. Product summary
 

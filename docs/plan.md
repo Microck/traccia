@@ -1,4 +1,4 @@
-# PLAN.md
+# plan
 
 ## 1. Build strategy
 

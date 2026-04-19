@@ -13,9 +13,7 @@
 
 `traccia` turns personal archives into a skill graph that can explain itself. feed it notes, code, docs, AI chats, exported platform data, and the usual pile of half-structured personal history. it keeps the source files untouched, extracts evidence with timestamps, and renders a graph that shows where a skill came from, how deep it looks, how current it is, and how central it is to the broader archive.
 
-the project is built for mixed archives rather than one clean source of truth. that includes repo history, reddit exports, google activity, social profiles, AI conversation logs, and everything else that tends to accumulate around a real person over time. the point is not to pretend those signals mean the same thing. `traccia` keeps weak signals weak, strong evidence strong, and the trail visible enough to challenge later.
-
-[spec](SPEC.md) | [plan](PLAN.md) | [decisions](decisions.md) | [references](REFERENCES.md)
+the project is built for mixed archives rather than one clean source of truth. that includes repo history, google activity, social profiles, AI conversation logs, and everything else that tends to accumulate around a real person over time. the point is not to pretend those signals mean the same thing. `traccia` keeps weak signals weak, strong evidence strong, and the trail visible enough to challenge later.
 
 ## why
 
@@ -67,7 +65,7 @@ backend:
   structured_output_mode: json_schema
 ```
 
-this is openai-style, not openai-only. any provider that clones the same request and response shape can be used by swapping `base_url`, `model`, and `api_key_env`. the current implementation deliberately targets `chat_completions` because it remains the most commonly copied interface across hosted and self-hosted providers, even if some vendors now prefer newer APIs for their own stacks. for OpenAI specifically, the example uses `gpt-5-chat-latest` because it is a current chat-capable alias that still matches the endpoint this repo implements today.
+any provider that clones the same request and response shape can be used by swapping `base_url`, `model`, and `api_key_env`. the current implementation deliberately targets `chat_completions` because it remains the most commonly copied interface across hosted and self-hosted providers, even if some vendors now prefer newer APIs for their own stacks. for OpenAI specifically, the example uses `gpt-5-chat-latest` because it is a current chat-capable alias that still matches the endpoint this repo implements today.
 
 ## backend surface
 
@@ -144,10 +142,10 @@ the full command list lives behind `traccia --help`, but the current working sur
 
 | path | purpose |
 | --- | --- |
-| `SPEC.md` | product and architecture spec |
-| `PLAN.md` | implementation plan and phase boundaries |
-| `decisions.md` | decisions and research conclusions |
-| `REFERENCES.md` | inspirations and anti-references |
+| `docs/spec.md` | product and architecture spec |
+| `docs/plan.md` | implementation plan and phase boundaries |
+| `docs/decisions.md` | decisions and research conclusions |
+| `docs/references.md` | inspirations and anti-references |
 | `src/traccia/` | implementation |
 | `tests/` | fixtures and regression coverage |
 
@@ -156,7 +154,17 @@ the full command list lives behind `traccia --help`, but the current working sur
 the current repo verification path is:
 
 ```bash
+uv run ruff check src tests
 uv run pytest -q
+uv build
 ```
 
 the live external backend path still depends on real credentials and a reachable compatible endpoint. nothing in this README assumes OpenAI specifically. it assumes an OpenAI-style contract.
+
+## automation
+
+github actions now handle the basic release path for the repo. pushes and pull requests run lint, tests, package builds, and a CLI smoke check. version tags matching `v*` build release artifacts and attach them to a github release. pypi publishing is wired for trusted publishing as an opt-in path, and only runs when the repository variable `PYPI_PUBLISH=true` is set and the repository has been registered as a trusted publisher on pypi.
+
+## license
+
+mit

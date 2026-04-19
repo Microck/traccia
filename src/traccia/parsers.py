@@ -19,8 +19,7 @@ from traccia.models import (
     SourceStatus,
     SourceType,
 )
-from traccia.utils import file_sha256, source_id_for_relative_path, now_utc, short_hash
-
+from traccia.utils import file_sha256, now_utc, short_hash, source_id_for_relative_path
 
 SUPPORTED_EXTENSIONS = {
     ".md": SourceType.MARKDOWN,

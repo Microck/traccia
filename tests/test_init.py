@@ -1,13 +1,13 @@
 import json
 import threading
-from pathlib import Path
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 from typer.testing import CliRunner
 
 from traccia.cli import app
 from traccia.config import TracciaConfig, load_config
-from traccia.llm import CanonicalizationRequest, OpenAICompatibleBackend, ScoringRequest
+from traccia.llm import OpenAICompatibleBackend, ScoringRequest
 from traccia.models import EvidenceItem
 from traccia.pipeline_support import build_skill_node
 
