@@ -77,7 +77,9 @@ class Storage:
 
     def fetch_source(self, source_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
-            row = connection.execute("select * from sources where source_id = ?", (source_id,)).fetchone()
+            row = connection.execute(
+                "select * from sources where source_id = ?", (source_id,)
+            ).fetchone()
             return dict(row) if row else None
 
     def list_sources(self) -> list[dict[str, Any]]:
@@ -107,8 +109,10 @@ class Storage:
             connection.execute(
                 """
                 insert into sources (
-                    source_id, uri, source_type, source_category, parser, sha256, created_at, ingested_at,
-                    title, language, sensitivity, metadata_json, status
+                    source_id, uri, source_type, source_category,
+                    parser, sha256, created_at, ingested_at,
+                    title, language, sensitivity, metadata_json,
+                    status
                 ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(source_id) do update set
                     uri = excluded.uri,
@@ -189,7 +193,9 @@ class Storage:
 
     def list_evidence(self) -> list[EvidenceItem]:
         with self.connect() as connection:
-            rows = connection.execute("select payload_json from evidence_items order by evidence_id").fetchall()
+            rows = connection.execute(
+                "select payload_json from evidence_items order by evidence_id"
+            ).fetchall()
             return [EvidenceItem.model_validate_json(row["payload_json"]) for row in rows]
 
     def list_source_evidence(self, source_id: str) -> list[EvidenceItem]:
@@ -217,7 +223,10 @@ class Storage:
                 payload = skill.model_dump(mode="json")
                 connection.execute(
                     """
-                    insert into skills (skill_id, kind, name, slug, description, status, created_by, last_updated)
+                    insert into skills (
+                        skill_id, kind, name, slug,
+                        description, status, created_by, last_updated
+                    )
                     values (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
@@ -246,8 +255,9 @@ class Storage:
                 connection.execute(
                     """
                     insert into person_skill_states (
-                        skill_id, level, xp, confidence, core_self_centrality, recency_score, breadth_score,
-                        depth_score, artifact_score, teaching_score, first_seen_at, first_learned_at,
+                        skill_id, level, xp, confidence, core_self_centrality,
+                        recency_score, breadth_score, depth_score, artifact_score,
+                        teaching_score, first_seen_at, first_learned_at,
                         first_strong_evidence_at, last_evidence_at, last_strong_evidence_at,
                         historical_peak_level, historical_peak_at, acquired_at, acquisition_basis,
                         freshness, status, locked, manual_note
@@ -305,8 +315,9 @@ class Storage:
                 """
                 select s.*, p.level, p.xp, p.confidence as state_confidence, p.recency_score,
                        p.core_self_centrality, p.breadth_score, p.depth_score, p.artifact_score,
-                       p.teaching_score, p.first_seen_at, p.first_learned_at, p.first_strong_evidence_at,
-                       p.last_evidence_at, p.last_strong_evidence_at, p.historical_peak_level,
+                       p.teaching_score, p.first_seen_at, p.first_learned_at,
+                       p.first_strong_evidence_at, p.last_evidence_at,
+                       p.last_strong_evidence_at, p.historical_peak_level,
                        p.historical_peak_at, p.acquired_at, p.acquisition_basis, p.freshness,
                        p.status as state_status, p.locked, p.manual_note
                 from skills s
@@ -334,8 +345,9 @@ class Storage:
                 """
                 select s.*, p.level, p.xp, p.confidence as state_confidence, p.recency_score,
                        p.core_self_centrality, p.breadth_score, p.depth_score, p.artifact_score,
-                       p.teaching_score, p.first_seen_at, p.first_learned_at, p.first_strong_evidence_at,
-                       p.last_evidence_at, p.last_strong_evidence_at, p.historical_peak_level,
+                       p.teaching_score, p.first_seen_at, p.first_learned_at,
+                       p.first_strong_evidence_at, p.last_evidence_at,
+                       p.last_strong_evidence_at, p.historical_peak_level,
                        p.historical_peak_at, p.acquired_at, p.acquisition_basis, p.freshness,
                        p.status as state_status, p.locked, p.manual_note
                 from skills s
@@ -388,19 +400,28 @@ class Storage:
 
     def get_review_item(self, item_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
-            row = connection.execute("select * from review_queue where item_id = ?", (item_id,)).fetchone()
+            row = connection.execute(
+                "select * from review_queue where item_id = ?", (item_id,)
+            ).fetchone()
             return dict(row) if row else None
 
     def set_review_status(self, item_id: str, status: str) -> None:
         with self.connect() as connection:
-            connection.execute("update review_queue set status = ? where item_id = ?", (status, item_id))
+            connection.execute(
+                "update review_queue set status = ? where item_id = ?",
+                (status, item_id),
+            )
 
-    def add_manual_override(self, *, target_type: str, target_id: str, action: str, payload: dict[str, Any]) -> None:
+    def add_manual_override(
+        self, *, target_type: str, target_id: str, action: str, payload: dict[str, Any],
+    ) -> None:
         override_id = f"{target_type}:{target_id}:{action}:{json.dumps(payload, sort_keys=True)}"
         with self.connect() as connection:
             connection.execute(
                 """
-                insert or ignore into manual_overrides (override_id, target_type, target_id, action, payload_json)
+                insert or ignore into manual_overrides (
+                    override_id, target_type, target_id, action, payload_json
+                )
                 values (?, ?, ?, ?, ?)
                 """,
                 (override_id, target_type, target_id, action, json.dumps(payload, sort_keys=True)),
@@ -408,7 +429,9 @@ class Storage:
 
     def list_manual_overrides(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
-            rows = connection.execute("select * from manual_overrides order by created_at, override_id").fetchall()
+            rows = connection.execute(
+                "select * from manual_overrides order by created_at, override_id"
+            ).fetchall()
             return [dict(row) for row in rows]
 
     def sync_review_queue_file(self) -> Path:

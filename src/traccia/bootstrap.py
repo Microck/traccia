@@ -21,8 +21,11 @@ Return strict JSON matching this shape:
       "span_start": 0,
       "span_end": 0,
       "quote": "exact quote from the source",
-      "evidence_type": "mentioned|studied|implemented|debugged|reviewed|designed|presented|taught|managed|researched|planned|used_tool|produced_artifact|received_feedback|passed_assessment|self_claimed",
-      "signal_class": "ambient_interest|self_presentation|community_participation|problem_solving_trace|artifact_backed_work",
+      "evidence_type": ("mentioned|studied|implemented|debugged|reviewed|designed|presented|taught|"
+          "managed|researched|planned|used_tool|produced_artifact|"
+          "received_feedback|passed_assessment|self_claimed"),
+      "signal_class": ("ambient_interest|self_presentation|community_participation|"
+          "problem_solving_trace|artifact_backed_work"),
       "skill_candidates": ["string"],
       "artifact_candidates": ["string"],
       "time_reference": "YYYY-MM-DD or null",

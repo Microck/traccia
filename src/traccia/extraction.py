@@ -20,7 +20,9 @@ ACTION_PATTERNS: list[tuple[EvidenceType, tuple[str, ...]]] = [
     (EvidenceType.TAUGHT, ("taught", "mentored", "coached")),
     (EvidenceType.PRESENTED, ("presented", "demoed", "explained")),
     (EvidenceType.DESIGNED, ("designed", "architected", "planned")),
-    (EvidenceType.IMPLEMENTED, ("built", "implemented", "wrote", "created", "developed", "stores results")),
+    (EvidenceType.IMPLEMENTED, (
+        "built", "implemented", "wrote", "created", "developed", "stores results",
+    )),
     (EvidenceType.REVIEWED, ("reviewed", "review")),
     (EvidenceType.STUDIED, ("studied", "read", "learned", "researched")),
     (EvidenceType.USED_TOOL, ("using", "used", "with")),
@@ -63,13 +65,17 @@ def extract_evidence(document: ParsedDocument) -> ExtractionResult:
 
         confidence = _confidence_for(document=document, evidence_type=evidence_type)
         evidence_item = EvidenceItem(
-            evidence_id=f"ev_{short_hash(f'{document.source.source_id}:{span.span_id}', length=12)}",
+            evidence_id=(
+                f"ev_{short_hash(f'{document.source.source_id}:{span.span_id}', length=12)}"
+            ),
             source_id=document.source.source_id,
             span_start=span.span_start,
             span_end=span.span_end,
             quote=span.text.replace("\n", " ").strip(),
             evidence_type=evidence_type,
-            signal_class=_signal_class_for(document=document, evidence_type=evidence_type, text=span.text),
+            signal_class=_signal_class_for(
+                document=document, evidence_type=evidence_type, text=span.text,
+            ),
             skill_candidates=candidate_names,
             artifact_candidates=_artifact_candidates(document.source.source_type),
             time_reference=_time_reference_for(document),
@@ -83,7 +89,10 @@ def extract_evidence(document: ParsedDocument) -> ExtractionResult:
             for name in candidate_names:
                 unresolved_candidates[name].append(evidence_item.evidence_id)
 
-    return ExtractionResult(evidence_items=evidence_items, unresolved_candidates=dict(unresolved_candidates))
+    return ExtractionResult(
+        evidence_items=evidence_items,
+        unresolved_candidates=dict(unresolved_candidates),
+    )
 
 
 def _time_reference_for(document: ParsedDocument) -> str | None:
@@ -97,7 +106,10 @@ def _classify_evidence_type(*, document: ParsedDocument, text: str) -> EvidenceT
     lowered = text.lower()
     if (
         document.source.source_category == SourceCategory.SOCIAL_OR_COMMUNITY_TRACE
-        and any(token in document.source.metadata.get("filename", "").lower() for token in ("profile", "bio", "about"))
+        and any(
+            token in document.source.metadata.get("filename", "").lower()
+            for token in ("profile", "bio", "about")
+        )
     ):
         return EvidenceType.SELF_CLAIMED
     if "maybe learn" in lowered or "someday" in lowered:
@@ -123,13 +135,17 @@ def _confidence_for(*, document: ParsedDocument, evidence_type: EvidenceType) ->
         SourceCategory.CONSUMED_CONTENT: 0.12,
         SourceCategory.EXECUTION_TRACE: 0.05,
     }.get(document.source.source_category, 0.0)
-    return max(0.05, min(0.99, EVIDENCE_BASE_CONFIDENCE[evidence_type] + source_bonus - signal_penalty))
+    return max(
+        0.05, min(0.99, EVIDENCE_BASE_CONFIDENCE[evidence_type] + source_bonus - signal_penalty)
+    )
 
 
 def _reliability_for(*, document: ParsedDocument, evidence_type: EvidenceType) -> ReliabilityTier:
     if document.source.source_type == SourceType.CODE:
         return ReliabilityTier.TIER_A
-    if document.source.source_category in {SourceCategory.PLATFORM_EXPORT_ACTIVITY, SourceCategory.METADATA_ONLY_ACTIVITY}:
+    if document.source.source_category in {
+        SourceCategory.PLATFORM_EXPORT_ACTIVITY, SourceCategory.METADATA_ONLY_ACTIVITY,
+    }:
         return ReliabilityTier.TIER_D
     if document.source.source_category == SourceCategory.SOCIAL_OR_COMMUNITY_TRACE:
         return ReliabilityTier.TIER_C
@@ -137,7 +153,9 @@ def _reliability_for(*, document: ParsedDocument, evidence_type: EvidenceType) -
         return ReliabilityTier.TIER_C
     if evidence_type in {EvidenceType.IMPLEMENTED, EvidenceType.DEBUGGED, EvidenceType.DESIGNED}:
         return ReliabilityTier.TIER_B
-    if evidence_type in {EvidenceType.PRESENTED, EvidenceType.TAUGHT, EvidenceType.REVIEWED, EvidenceType.STUDIED}:
+    if evidence_type in {
+        EvidenceType.PRESENTED, EvidenceType.TAUGHT, EvidenceType.REVIEWED, EvidenceType.STUDIED,
+    }:
         return ReliabilityTier.TIER_B
     return ReliabilityTier.TIER_C
 
@@ -161,7 +179,9 @@ def _infer_from_source_type(source_type: SourceType) -> list[str]:
     }.get(source_type, [])
 
 
-def _signal_class_for(*, document: ParsedDocument, evidence_type: EvidenceType, text: str) -> SignalClass:
+def _signal_class_for(
+    *, document: ParsedDocument, evidence_type: EvidenceType, text: str,
+) -> SignalClass:
     del text
     source_category = document.source.source_category
     filename = document.source.metadata.get("filename", "").lower()
@@ -180,13 +200,18 @@ def _signal_class_for(*, document: ParsedDocument, evidence_type: EvidenceType, 
             return SignalClass.ARTIFACT_BACKED_WORK
         return SignalClass.PROBLEM_SOLVING_TRACE
     if source_category == SourceCategory.AI_DIALOGUE:
-        if evidence_type in {EvidenceType.IMPLEMENTED, EvidenceType.DEBUGGED, EvidenceType.DESIGNED, EvidenceType.REVIEWED}:
+        if evidence_type in {
+            EvidenceType.IMPLEMENTED, EvidenceType.DEBUGGED,
+            EvidenceType.DESIGNED, EvidenceType.REVIEWED,
+        }:
             return SignalClass.PROBLEM_SOLVING_TRACE
         return SignalClass.AMBIENT_INTEREST
     if source_category == SourceCategory.SOCIAL_OR_COMMUNITY_TRACE:
         if any(token in filename for token in ("profile", "bio", "about")):
             return SignalClass.SELF_PRESENTATION
         return SignalClass.COMMUNITY_PARTICIPATION
-    if source_category in {SourceCategory.PLATFORM_EXPORT_ACTIVITY, SourceCategory.METADATA_ONLY_ACTIVITY, SourceCategory.CONSUMED_CONTENT}:
+    if source_category in {
+        SourceCategory.PLATFORM_EXPORT_ACTIVITY, SourceCategory.METADATA_ONLY_ACTIVITY,
+        SourceCategory.CONSUMED_CONTENT,
+    }:
         return SignalClass.AMBIENT_INTEREST
-    return SignalClass.AMBIENT_INTEREST
