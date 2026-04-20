@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from docx import Document as DocxDocument
-from pypdf import PdfReader
-
+from traccia.config import TracciaConfig
+from traccia.document_normalizer import DOCUMENT_SOURCE_TYPES, normalize_document
 from traccia.models import (
     ParsedDocument,
     ParsedSpan,
@@ -25,6 +25,20 @@ SUPPORTED_EXTENSIONS = {
     ".md": SourceType.MARKDOWN,
     ".markdown": SourceType.MARKDOWN,
     ".txt": SourceType.TEXT,
+    ".log": SourceType.TEXT,
+    ".html": SourceType.TEXT,
+    ".htm": SourceType.TEXT,
+    ".xml": SourceType.TEXT,
+    ".svg": SourceType.TEXT,
+    ".yaml": SourceType.TEXT,
+    ".yml": SourceType.TEXT,
+    ".toml": SourceType.TEXT,
+    ".ini": SourceType.TEXT,
+    ".cfg": SourceType.TEXT,
+    ".conf": SourceType.TEXT,
+    ".env": SourceType.TEXT,
+    ".jsonl": SourceType.TEXT,
+    ".ndjson": SourceType.TEXT,
     ".py": SourceType.CODE,
     ".js": SourceType.CODE,
     ".ts": SourceType.CODE,
@@ -32,11 +46,56 @@ SUPPORTED_EXTENSIONS = {
     ".rs": SourceType.CODE,
     ".go": SourceType.CODE,
     ".sql": SourceType.CODE,
+    ".sh": SourceType.CODE,
+    ".bash": SourceType.CODE,
+    ".zsh": SourceType.CODE,
     ".json": SourceType.JSON,
     ".csv": SourceType.CSV,
     ".pdf": SourceType.PDF,
     ".docx": SourceType.DOCX,
 }
+
+KNOWN_BINARY_EXTENSIONS = {
+    ".7z",
+    ".aac",
+    ".avif",
+    ".avi",
+    ".bmp",
+    ".dmg",
+    ".exe",
+    ".flac",
+    ".gif",
+    ".heic",
+    ".heif",
+    ".ico",
+    ".jar",
+    ".jpeg",
+    ".jpg",
+    ".m4a",
+    ".mkv",
+    ".mov",
+    ".mp3",
+    ".mp4",
+    ".ogg",
+    ".otf",
+    ".png",
+    ".rar",
+    ".ttf",
+    ".wav",
+    ".webm",
+    ".webp",
+    ".woff",
+    ".woff2",
+}
+
+TEXT_READ_ENCODINGS = (
+    "utf-8",
+    "utf-8-sig",
+    "utf-16",
+    "utf-16-le",
+    "utf-16-be",
+    "latin-1",
+)
 
 
 @dataclass(slots=True)
@@ -61,16 +120,64 @@ def supported_file(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXTENSIONS
 
 
+def ingestable_file(path: Path) -> bool:
+    return supported_file(path) or sniff_text_file(path)
+
+
 def detect_source_type(path: Path) -> SourceType:
-    return SUPPORTED_EXTENSIONS[path.suffix.lower()]
+    source_type = SUPPORTED_EXTENSIONS.get(path.suffix.lower())
+    if source_type:
+        return source_type
+    if sniff_text_file(path):
+        return SourceType.TEXT
+    raise ValueError(f"Unsupported source type for path: {path}")
 
 
-def parse_document(path: Path, *, project_relative_path: Path) -> ParsedDocument:
+def sniff_text_file(path: Path) -> bool:
+    if path.suffix.lower() in KNOWN_BINARY_EXTENSIONS:
+        return False
+    try:
+        with path.open("rb") as handle:
+            return sniff_text_bytes(handle.read(4096))
+    except OSError:
+        return False
+
+
+def sniff_text_bytes(sample: bytes) -> bool:
+    if not sample:
+        return True
+    if sample.startswith((b"\xef\xbb\xbf", b"\xff\xfe", b"\xfe\xff")):
+        return True
+    if b"\x00" in sample:
+        return False
+    try:
+        sample.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        pass
+    try:
+        sample.decode("utf-16")
+        return True
+    except UnicodeDecodeError:
+        pass
+
+    decoded = sample.decode("latin-1")
+    printable = sum(character.isprintable() or character.isspace() for character in decoded)
+    return printable / len(decoded) >= 0.85
+
+
+def parse_document(
+    path: Path,
+    *,
+    project_relative_path: Path,
+    config: TracciaConfig | None = None,
+) -> ParsedDocument:
     source_id = source_id_for_relative_path(project_relative_path)
     parsed_source = _parse_source_content(
         path=path,
         project_relative_path=project_relative_path,
         source_id=source_id,
+        config=config,
     )
     source = SourceDocument(
         source_id=source_id,
@@ -104,10 +211,11 @@ def _parse_source_content(
     path: Path,
     project_relative_path: Path,
     source_id: str,
+    config: TracciaConfig | None = None,
 ) -> ParsedSourceContent:
     source_type = detect_source_type(path)
     if source_type == SourceType.JSON:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(_read_text_with_fallback(path))
         structured = _parse_structured_json_source(
             payload=payload,
             path=path,
@@ -117,8 +225,17 @@ def _parse_source_content(
         if structured:
             return structured
         text = json.dumps(payload, indent=2, sort_keys=True)
+        parser = _parser_name(source_type)
+        metadata: dict[str, Any] = {}
+    elif source_type in DOCUMENT_SOURCE_TYPES:
+        normalized = normalize_document(path, source_type=source_type, config=config)
+        text = normalized.text
+        parser = normalized.parser
+        metadata = normalized.metadata
     else:
         text = _read_text(path, source_type)
+        parser = _parser_name(source_type)
+        metadata = {}
 
     source_category = _classify_source_category(
         path=path,
@@ -131,33 +248,36 @@ def _parse_source_content(
         spans=_segment_text(text=text, source_id=source_id),
         source_type=source_type,
         source_category=source_category,
-        parser=_parser_name(source_type),
+        parser=parser,
         title=None,
         created_at=None,
-        metadata={},
+        metadata=metadata,
     )
 
 
 def _read_text(path: Path, source_type: SourceType) -> str:
     if source_type in {SourceType.MARKDOWN, SourceType.TEXT, SourceType.CODE}:
-        return path.read_text(encoding="utf-8")
+        return _read_text_with_fallback(path)
     if source_type == SourceType.JSON:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(_read_text_with_fallback(path))
         return json.dumps(payload, indent=2, sort_keys=True)
     if source_type == SourceType.CSV:
+        csv_text = _read_text_with_fallback(path)
         rows: list[str] = []
-        with path.open("r", encoding="utf-8", newline="") as handle:
-            reader = csv.DictReader(handle)
-            for row in reader:
-                rows.append(", ".join(f"{key}={value}" for key, value in row.items()))
+        reader = csv.DictReader(io.StringIO(csv_text))
+        for row in reader:
+            rows.append(", ".join(f"{key}={value}" for key, value in row.items()))
         return "\n".join(rows)
-    if source_type == SourceType.PDF:
-        reader = PdfReader(str(path))
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
-    if source_type == SourceType.DOCX:
-        document = DocxDocument(str(path))
-        return "\n".join(paragraph.text for paragraph in document.paragraphs)
     raise ValueError(f"Unsupported source type: {source_type}")
+
+
+def _read_text_with_fallback(path: Path) -> str:
+    for encoding in TEXT_READ_ENCODINGS:
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def _parser_name(source_type: SourceType) -> str:
@@ -188,9 +308,18 @@ def _guess_language(path: Path) -> str | None:
         ".rs": "rust",
         ".go": "go",
         ".sql": "sql",
+        ".sh": "shell",
+        ".bash": "shell",
+        ".zsh": "shell",
         ".md": "markdown",
         ".markdown": "markdown",
         ".json": "json",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+        ".toml": "toml",
+        ".html": "html",
+        ".htm": "html",
+        ".xml": "xml",
         ".csv": "csv",
     }.get(path.suffix.lower())
 
@@ -447,31 +576,39 @@ def _parse_google_activity_export(*, payload: object, source_id: str) -> ParsedS
 
 
 def _build_structured_spans(*, entries: list[dict[str, str]], source_id: str) -> tuple[str, list[ParsedSpan]]:
-    text = "\n\n".join(entry["text"] for entry in entries)
+    text_parts: list[str] = []
     spans: list[ParsedSpan] = []
     cursor = 0
+    line_cursor = 1
     for index, entry in enumerate(entries):
-        if not entry["text"]:
+        entry_text = entry["text"]
+        if not entry_text:
             continue
-        start = text.find(entry["text"], cursor)
-        end = start + len(entry["text"])
-        line_start = text[:start].count("\n") + 1
-        line_end = line_start + entry["text"].count("\n")
+        if text_parts:
+            text_parts.append("\n\n")
+            cursor += 2
+            line_cursor += 2
+        start = cursor
+        end = start + len(entry_text)
+        line_start = line_cursor
+        line_end = line_start + entry_text.count("\n")
         spans.append(
             ParsedSpan(
                 span_id=f"span_{short_hash(f'{source_id}:structured:{index}:{start}:{end}', length=10)}",
                 source_id=source_id,
                 segment_kind="structured_entry",
                 heading=entry.get("heading") or None,
-                text=entry["text"],
+                text=entry_text,
                 span_start=start,
                 span_end=end,
                 line_start=line_start,
                 line_end=line_end,
             )
         )
+        text_parts.append(entry_text)
         cursor = end
-    return text, spans
+        line_cursor = line_end
+    return "".join(text_parts), spans
 
 
 def _coerce_message_text(content: object) -> str:

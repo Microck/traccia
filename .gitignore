@@ -13,3 +13,6 @@ build/
 dist/
 *.egg-info/
 .DS_Store
+
+# dora code context index
+.dora/

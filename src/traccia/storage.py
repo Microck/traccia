@@ -144,7 +144,14 @@ class Storage:
     def replace_source_spans(self, source_id: str, spans: list[ParsedSpan]) -> None:
         with self.connect() as connection:
             connection.execute("delete from source_spans where source_id = ?", (source_id,))
-            for span in spans:
+            seen_span_ids: set[str] = set()
+            for index, span in enumerate(spans):
+                span_id = span.span_id
+                if span_id in seen_span_ids:
+                    span_id = f"{span.span_id}::{index}"
+                    while span_id in seen_span_ids:
+                        span_id = f"{span.span_id}::{index}:{len(seen_span_ids)}"
+                seen_span_ids.add(span_id)
                 connection.execute(
                     """
                     insert into source_spans (
@@ -152,12 +159,12 @@ class Storage:
                     ) values (?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        span.span_id,
+                        span_id,
                         source_id,
                         span.span_start,
                         span.span_end,
                         span.segment_kind,
-                        span.span_id,
+                        span_id,
                     ),
                 )
 

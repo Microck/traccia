@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,6 +11,10 @@ from typer.testing import CliRunner
 
 from traccia.cli import app
 from traccia.config import load_config, write_config
+from traccia.llm import FakeLLMBackend
+from traccia.models import EvidenceItem, EvidenceType, ParsedSpan, ReliabilityTier, SignalClass
+from traccia.pipeline import Pipeline
+from traccia.utils import source_id_for_relative_path
 
 
 def initialize_repo(runner: CliRunner, project_root: Path) -> None:
@@ -36,6 +41,15 @@ def set_mtime(path: Path, timestamp: datetime) -> None:
     epoch_seconds = timestamp.timestamp()
     path.touch()
     os.utime(path, (epoch_seconds, epoch_seconds))
+
+
+def latest_manifest(project_root: Path) -> dict[str, object]:
+    manifest_paths = sorted(
+        (project_root / "state" / "manifests").glob("*.json"),
+        key=lambda path: path.stat().st_mtime_ns,
+    )
+    assert manifest_paths
+    return json.loads(manifest_paths[-1].read_text())
 
 
 def test_ingest_dir_builds_graph_and_artifacts(tmp_path: Path) -> None:
@@ -244,3 +258,326 @@ def test_rendering_redacts_secret_like_values_when_raw_export_is_enabled(tmp_pat
     assert secret not in node_page
     assert "Core-self centrality" in node_page
     assert "First strong evidence" in node_page
+
+
+def test_ingest_dir_accepts_text_like_unknown_extension(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "mixed-corpus"
+    corpus_root.mkdir()
+    export_file = corpus_root / "activity.export"
+    export_file.write_text("I built a Python parser and debugged the ingest pipeline.\n")
+
+    result = runner.invoke(app, ["ingest-dir", str(corpus_root), "--project-root", str(tmp_path)])
+    assert result.exit_code == 0, result.stdout
+    assert "imported=1" in result.stdout
+    assert "processed=1" in result.stdout
+
+    storage = Pipeline(tmp_path).storage
+    sources = storage.list_sources()
+    assert len(sources) == 1
+    assert sources[0]["title"] == "Activity"
+    assert "activity.export" in json.loads(sources[0]["metadata_json"])["filename"]
+
+
+def test_ingest_dir_expands_zip_exports(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "zip-corpus"
+    corpus_root.mkdir()
+    archive_path = corpus_root / "reddit-export.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "reddit/posts.md",
+            "I built a Python ingestion tool and reviewed the SQLite schema.\n",
+        )
+
+    result = runner.invoke(app, ["ingest-dir", str(corpus_root), "--project-root", str(tmp_path)])
+    assert result.exit_code == 0, result.stdout
+    assert "imported=1" in result.stdout
+    assert "processed=1" in result.stdout
+
+    expanded_file = (
+        tmp_path
+        / "raw"
+        / "imported"
+        / "zip-corpus"
+        / "reddit-export"
+        / "reddit"
+        / "posts.md"
+    )
+    assert expanded_file.exists()
+
+    storage = Pipeline(tmp_path).storage
+    sources = storage.list_sources()
+    assert len(sources) == 1
+    assert sources[0]["uri"] == expanded_file.resolve().as_uri()
+
+
+def test_ingest_dir_writes_processed_then_skipped_manifests(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "takeout-corpus"
+    takeout_file = corpus_root / "Takeout" / "My Activity" / "Chrome" / "MyActivity.html"
+    takeout_file.parent.mkdir(parents=True)
+    takeout_file.write_text(
+        "<html><body>I built a Python parser and debugged the ingest pipeline.</body></html>\n"
+    )
+
+    first_run = runner.invoke(app, ["ingest-dir", str(corpus_root), "--project-root", str(tmp_path)])
+    assert first_run.exit_code == 0, first_run.stdout
+
+    first_manifest = latest_manifest(tmp_path)
+    assert first_manifest["root_uri"] == corpus_root.resolve().as_uri()
+    assert len(first_manifest["materials"]) == 1
+    first_entry = first_manifest["materials"][0]
+    assert first_entry["status"] == "processed"
+    assert first_entry["source_family"] == "google_takeout"
+    assert first_entry["archive_member"] is None
+
+    second_run = runner.invoke(app, ["ingest-dir", str(corpus_root), "--project-root", str(tmp_path)])
+    assert second_run.exit_code == 0, second_run.stdout
+
+    second_manifest = latest_manifest(tmp_path)
+    second_entry = second_manifest["materials"][0]
+    assert second_entry["status"] == "skipped"
+    assert second_entry["source_family"] == "google_takeout"
+
+    storage = Pipeline(tmp_path).storage
+    sources = storage.list_sources()
+    assert len(sources) == 1
+    metadata = json.loads(sources[0]["metadata_json"])
+    assert metadata["source_family"] == "google_takeout"
+    assert "Google Takeout" in metadata["source_family_reason"]
+
+
+def test_ingest_dir_records_archive_family_and_member_in_manifest(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "archive-corpus"
+    corpus_root.mkdir()
+    archive_path = corpus_root / "twitter-export.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            "data/account.js",
+            'window.YTD.account.part0 = [{"account": {"username": "alice"}}];\n',
+        )
+
+    result = runner.invoke(app, ["ingest-dir", str(corpus_root), "--project-root", str(tmp_path)])
+    assert result.exit_code == 0, result.stdout
+
+    manifest = latest_manifest(tmp_path)
+    assert len(manifest["materials"]) == 1
+    entry = manifest["materials"][0]
+    assert entry["status"] == "processed"
+    assert entry["source_family"] == "twitter_archive"
+    assert entry["archive_member"] == "data/account.js"
+
+    storage = Pipeline(tmp_path).storage
+    sources = storage.list_sources()
+    assert len(sources) == 1
+    metadata = json.loads(sources[0]["metadata_json"])
+    assert metadata["source_family"] == "twitter_archive"
+    assert metadata["archive_member"] == "data/account.js"
+
+
+class ChunkRecordingBackend:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    def extract_evidence(self, *, prompt: str, document) -> list[EvidenceItem]:
+        del prompt
+        self.call_count += 1
+        span = document.spans[0]
+        return [
+            EvidenceItem(
+                evidence_id="duplicate",
+                source_id=document.source.source_id,
+                span_start=span.span_start,
+                span_end=span.span_end,
+                quote=span.text,
+                evidence_type=EvidenceType.IMPLEMENTED,
+                signal_class=SignalClass.ARTIFACT_BACKED_WORK,
+                skill_candidates=["Python"],
+                artifact_candidates=["text export"],
+                time_reference=document.source.ingested_at.isoformat(),
+                reliability=ReliabilityTier.TIER_B,
+                extractor_version="chunk-test",
+                confidence=0.9,
+            )
+        ]
+
+
+class FailOnceBackend:
+    def __init__(self) -> None:
+        self.failed = False
+        self.delegate = FakeLLMBackend()
+
+    def extract_evidence(self, *, prompt: str, document) -> list[EvidenceItem]:
+        del prompt
+        if not self.failed:
+            self.failed = True
+            raise RuntimeError("transient failure")
+        span = document.spans[0]
+        return [
+            EvidenceItem(
+                evidence_id="resume-test",
+                source_id=document.source.source_id,
+                span_start=span.span_start,
+                span_end=span.span_end,
+                quote=span.text,
+                evidence_type=EvidenceType.IMPLEMENTED,
+                signal_class=SignalClass.ARTIFACT_BACKED_WORK,
+                skill_candidates=["Python"],
+                artifact_candidates=["resume test"],
+                time_reference=document.source.ingested_at.isoformat(),
+                reliability=ReliabilityTier.TIER_B,
+                extractor_version="resume-test",
+                confidence=0.9,
+            )
+        ]
+
+    def canonicalize(self, *, prompt: str, request):
+        return self.delegate.canonicalize(prompt=prompt, request=request)
+
+    def score_skill(self, *, prompt: str, request):
+        return self.delegate.score_skill(prompt=prompt, request=request)
+
+
+def test_ingest_file_chunks_large_documents_and_normalizes_evidence_ids(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "large-corpus"
+    corpus_root.mkdir()
+    large_file = corpus_root / "notes.txt"
+    large_file.write_text(
+        "\n\n".join(
+            f"I built a Python ingestion component number {index} and debugged its parser."
+            for index in range(150)
+        )
+        + "\n"
+    )
+
+    pipeline = Pipeline(tmp_path)
+    backend = ChunkRecordingBackend()
+    pipeline.backend = backend
+
+    source_id, processed = pipeline.ingest_file(large_file, root=corpus_root)
+    assert processed is True
+    assert backend.call_count > 1
+
+    evidence_items = pipeline.storage.list_source_evidence(source_id)
+    assert len(evidence_items) == backend.call_count
+    assert len({item.evidence_id for item in evidence_items}) == len(evidence_items)
+
+
+def test_ingest_file_can_resume_after_partial_failure(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "resume-corpus"
+    corpus_root.mkdir()
+    source_path = corpus_root / "notes.txt"
+    source_path.write_text("I built a Python ingest pipeline and debugged the parser.\n")
+
+    pipeline = Pipeline(tmp_path)
+    flaky_backend = FailOnceBackend()
+    pipeline.backend = flaky_backend
+
+    try:
+        pipeline.ingest_file(source_path, root=corpus_root)
+    except RuntimeError as exc:
+        assert "transient failure" in str(exc)
+    else:
+        raise AssertionError("expected first ingest to fail")
+
+    source_id = source_id_for_relative_path(Path("resume-corpus") / "notes.txt")
+    assert (tmp_path / "parsed" / f"{source_id}.json").exists()
+    assert not (tmp_path / "evidence" / f"{source_id}.json").exists()
+
+    resumed_pipeline = Pipeline(tmp_path)
+    resumed_pipeline.backend = flaky_backend
+    resumed_source_id, processed = resumed_pipeline.ingest_file(source_path, root=corpus_root)
+
+    assert resumed_source_id == source_id
+    assert processed is True
+    assert (tmp_path / "evidence" / f"{source_id}.json").exists()
+    assert len(resumed_pipeline.storage.list_source_evidence(source_id)) == 1
+
+
+def test_ingest_dir_continues_after_material_failure(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "partial-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "one.txt").write_text("I built a Python parser.\n")
+    (corpus_root / "two.txt").write_text("I debugged the SQLite migration.\n")
+
+    pipeline = Pipeline(tmp_path)
+    flaky_backend = FailOnceBackend()
+    pipeline.backend = flaky_backend
+
+    result = pipeline.ingest_directory(corpus_root)
+
+    assert result.failed == 1
+    assert result.processed == 1
+    assert len(pipeline.storage.list_sources()) == 2
+    assert len(pipeline.storage.list_evidence()) == 1
+
+    resumed_pipeline = Pipeline(tmp_path)
+    resumed_pipeline.backend = flaky_backend
+    resumed_result = resumed_pipeline.ingest_directory(corpus_root)
+
+    assert resumed_result.failed == 0
+    assert resumed_result.processed >= 1
+    assert len(resumed_pipeline.storage.list_evidence()) >= 2
+
+
+def test_replace_source_spans_deduplicates_duplicate_span_ids(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    pipeline = Pipeline(tmp_path)
+    pipeline.storage.replace_source_spans(
+        "src_duplicate",
+        [
+            ParsedSpan(
+                span_id="span_duplicate",
+                source_id="src_duplicate",
+                segment_kind="line",
+                heading=None,
+                text="first",
+                span_start=0,
+                span_end=5,
+                line_start=1,
+                line_end=1,
+            ),
+            ParsedSpan(
+                span_id="span_duplicate",
+                source_id="src_duplicate",
+                segment_kind="line",
+                heading=None,
+                text="second",
+                span_start=6,
+                span_end=12,
+                line_start=2,
+                line_end=2,
+            ),
+        ],
+    )
+
+    with pipeline.storage.connect() as connection:
+        rows = connection.execute(
+            "select span_id from source_spans where source_id = ? order by span_start",
+            ("src_duplicate",),
+        ).fetchall()
+
+    assert len(rows) == 2
+    assert rows[0]["span_id"] == "span_duplicate"
+    assert rows[1]["span_id"].startswith("span_duplicate::")

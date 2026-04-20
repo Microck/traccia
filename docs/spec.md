@@ -165,6 +165,31 @@ Weak signals may support interest, exposure, or identity context. They must not 
 ### 6.5 Archive boundary in MVP
 MVP may ingest broader personal material than explicit skill artifacts, but non-skill context is modeled only as auxiliary metadata or facets attached to sources and evidence. It does not become first-class scored graph nodes in MVP.
 
+### 6.6 Archive-first source families
+Large export bundles should not be treated as anonymous files. The discovery layer should classify each discovered material into a source family before deeper parsing, for example:
+- `generic`
+- `google_takeout`
+- `discord_data_package`
+- `twitter_archive`
+- `reddit_export`
+
+Rules:
+- source-family detection happens before evidence extraction
+- archive containers such as zip files are expanded into individually tracked materials
+- the detected source family and the detection reason are stored in source metadata and per-run ingest manifests
+- generic parsing remains available as a fallback when no export-family marker matches
+
+### 6.7 Document normalization
+Document-like inputs may require a normalization step before span segmentation. This is distinct from source-family detection.
+
+Rules:
+- PDF and DOCX ingestion must pass through a document normalizer
+- markdown-preserving normalization is preferred over plain-text extraction when a strong local provider is available
+- the default provider sequence should be local-first, with PDF favoring `marker -> docling -> markitdown -> native` and DOCX favoring `docling -> markitdown -> native`
+- OCR is a separate document concern and must not be hard-coupled to the main LLM scoring backend
+- OCR should default to free/local engines or local auto-detection, not OpenAI-specific vision APIs
+- the chosen normalizer, OCR provider, parser provenance, and whether OCR was used must be stored in source metadata
+
 ## 7. Output artifacts
 
 Required outputs:
@@ -174,6 +199,7 @@ Required outputs:
 - `graph/graph.json` - canonical graph export
 - `graph/tree.json` - layout-ready tree export
 - `state/catalog.sqlite` - system state
+- `state/manifests/<ingest-id>.json` - per-run ingest manifest with discovered materials, source-family classification, and processing outcome
 - `state/review_queue.jsonl` - pending human review items
 - `viewer/` - generated read-only local graph browser bundle
 
@@ -445,8 +471,10 @@ Rules:
 ### Stage 0: Discover
 - register file
 - fingerprint it
+- detect source family
 - assign parser
 - detect whether unchanged
+- write an ingest manifest for the run
 
 ### Stage 1: Parse
 - extract text, structure, metadata, and obvious timestamps

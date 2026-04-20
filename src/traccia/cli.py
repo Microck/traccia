@@ -168,7 +168,10 @@ def ingest_dir(
 ) -> None:
     result = _pipeline(project_root).ingest_directory(path.resolve())
     typer.echo(
-        f"imported={result.imported} processed={result.processed} skipped={result.skipped} deleted={result.deleted}"
+        (
+            f"imported={result.imported} processed={result.processed} skipped={result.skipped} "
+            f"failed={result.failed} deleted={result.deleted}"
+        )
     )
 
 

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 from urllib import error, request
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from traccia.config import TracciaConfig
 from traccia.extraction import extract_evidence as fake_extract_evidence
@@ -201,9 +202,29 @@ class OpenAICompatibleBackend:
             ],
             "response_format": response_format,
         }
-        response_body = self._post_json("/chat/completions", body)
-        content = self._extract_message_content(response_body)
-        return schema_model.model_validate_json(self._normalize_json_content(content))
+        attempts = max(1, self.config.backend.max_retries)
+        last_error: Exception | None = None
+        for attempt_index in range(attempts):
+            response_body = self._post_json("/chat/completions", body)
+            content = self._extract_message_content(response_body)
+            normalized_content = self._normalize_json_content(content)
+            try:
+                return schema_model.model_validate_json(normalized_content)
+            except ValidationError as exc:
+                current_error = exc
+                repaired_content = _repair_common_json_issues(normalized_content)
+                if repaired_content != normalized_content:
+                    try:
+                        return schema_model.model_validate_json(repaired_content)
+                    except ValidationError as repaired_exc:
+                        current_error = repaired_exc
+                last_error = current_error
+                if attempt_index == attempts - 1:
+                    raise BackendError(
+                        f"Structured response validation failed after {attempts} attempt(s): {current_error}"
+                    ) from current_error
+                time.sleep(0.2 * (attempt_index + 1))
+        raise BackendError(f"Structured response validation failed: {last_error}")
 
     def _response_format(self, *, schema_model, schema_name: str) -> dict[str, object]:
         if self.config.backend.structured_output_mode == "json_schema":
@@ -256,11 +277,19 @@ class OpenAICompatibleBackend:
                 last_error = BackendError(f"LLM backend request failed ({exc.code}): {body}")
                 if exc.code not in {408, 409, 429, 500, 502, 503, 504} or attempt_index == retries - 1:
                     raise last_error from exc
+                time.sleep(
+                    _retry_delay_seconds(
+                        attempt_index=attempt_index,
+                        http_status=exc.code,
+                        error_body=body,
+                    )
+                )
+                continue
             except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
                 last_error = BackendError(f"LLM backend request failed: {exc}")
                 if attempt_index == retries - 1:
                     raise last_error from exc
-            time.sleep(0.5 * (2**attempt_index))
+            time.sleep(_retry_delay_seconds(attempt_index=attempt_index))
         raise BackendError(f"LLM backend request failed: {last_error}")
 
     def _get_json(self, path: str) -> dict[str, object]:
@@ -304,10 +333,10 @@ class OpenAICompatibleBackend:
             return json.dumps(content)
         stripped = content.strip()
         if stripped.startswith("```"):
-            stripped = stripped.strip("`")
-            if stripped.startswith("json"):
-                stripped = stripped[4:].strip()
-        return stripped
+            stripped = _strip_json_fence(stripped)
+        if "{" in stripped and "}" in stripped:
+            stripped = stripped[stripped.find("{") : stripped.rfind("}") + 1]
+        return re.sub(r"[\x00-\x1F]", " ", stripped)
 
 
 def backend_from_config(config: TracciaConfig) -> LLMBackend:
@@ -371,3 +400,31 @@ def _scoring_payload(request: ScoringRequest) -> str:
             f"- evidence_id={item.evidence_id} type={item.evidence_type.value} signal_class={item.signal_class.value} confidence={item.confidence} quote={item.quote}"
         )
     return "\n".join(lines)
+
+
+def _strip_json_fence(content: str) -> str:
+    stripped = content.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    lines = stripped.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].startswith("```"):
+        lines = lines[:-1]
+    if lines and lines[0].strip().lower() == "json":
+        lines = lines[1:]
+    return "\n".join(lines).strip()
+
+
+def _repair_common_json_issues(content: str) -> str:
+    # Some models emit JSON-looking strings with bare backslashes inside quoted values.
+    # Repair those escapes before giving up so transient formatting glitches do not fail ingestion.
+    return re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", content)
+
+
+def _retry_delay_seconds(
+    *, attempt_index: int, http_status: int | None = None, error_body: str | None = None
+) -> float:
+    if http_status == 503 and error_body and "auth_unavailable" in error_body:
+        return min(30.0, 5.0 * (2**attempt_index))
+    return 0.5 * (2**attempt_index)

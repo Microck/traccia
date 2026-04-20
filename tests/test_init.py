@@ -5,6 +5,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
+import traccia.llm as llm_module
 from traccia.cli import app
 from traccia.config import TracciaConfig, load_config
 from traccia.llm import OpenAICompatibleBackend, ScoringRequest
@@ -31,6 +32,8 @@ def test_init_creates_phase_zero_layout(tmp_path: Path) -> None:
     config = load_config(tmp_path / "config" / "config.yaml")
     assert config.project_name == "traccia"
     assert config.thresholds.consumption_max_level == 2
+    assert config.document_normalization.provider == "auto"
+    assert config.document_normalization.ocr_provider == "auto"
 
 
 def test_help_lists_phase_zero_commands() -> None:
@@ -187,6 +190,289 @@ def test_openai_compatible_backend_uses_openai_style_http_contract(monkeypatch) 
         assert backend.healthcheck() == "backend reachable, models=1"
         assert requests[0]["response_format"]["type"] == "json_schema"
         assert requests[0]["messages"][0]["role"] == "system"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_openai_compatible_backend_repairs_invalid_json_escapes(monkeypatch) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path != "/chat/completions":
+                self.send_error(404)
+                return
+            content = (
+                '{"level": 3, "confidence": 0.88, "recency_score": 0.7, "breadth_score": 0.4, '
+                '"depth_score": 0.8, "artifact_score": 0.6, "teaching_score": 0.2, '
+                '"freshness": "active", "status": "active", "manual_note": null, '
+                '"rationale": "Recovered path C:\\Users\\alice"}'
+            )
+            response = {"choices": [{"message": {"content": content}}]}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode("utf-8"))
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A003
+            del format, args
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        monkeypatch.setenv("TEST_OPENAI_COMPATIBLE_KEY", "test-key")
+        config = TracciaConfig.model_validate(
+            {
+                "project_name": "fixture-traccia",
+                "backend": {
+                    "provider": "openai_compatible",
+                    "model": "stub-model",
+                    "api_key_env": "TEST_OPENAI_COMPATIBLE_KEY",
+                    "base_url": f"http://127.0.0.1:{server.server_port}",
+                    "api_style": "chat_completions",
+                    "structured_output_mode": "json_schema",
+                    "timeout_seconds": 5,
+                    "max_retries": 1,
+                },
+            }
+        )
+        backend = OpenAICompatibleBackend(config)
+
+        payload = backend.score_skill(
+            prompt="Return a score payload.",
+            request=ScoringRequest(
+                skill=build_skill_node("Python"),
+                evidence_items=[
+                    EvidenceItem.model_validate(
+                        {
+                            "evidence_id": "ev_python",
+                            "source_id": "src_python",
+                            "span_start": 0,
+                            "span_end": 10,
+                            "quote": "Built a Python CLI.",
+                            "evidence_type": "implemented",
+                            "signal_class": "artifact_backed_work",
+                            "skill_candidates": ["Python"],
+                            "artifact_candidates": [],
+                            "time_reference": "2026-04-01",
+                            "reliability": "tier_a",
+                            "extractor_version": "phase-0",
+                            "confidence": 0.9,
+                        }
+                    )
+                ],
+                thresholds={"consumption_max_level": 2},
+                locked=False,
+                hidden=False,
+            ),
+        )
+
+        assert payload.level == 3
+        assert "C:\\Users\\alice" in payload.rationale
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_openai_compatible_backend_uses_full_validation_retry_budget(monkeypatch) -> None:
+    attempts = {"count": 0}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path != "/chat/completions":
+                self.send_error(404)
+                return
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                content = "{ definitely not valid json }"
+            else:
+                content = json.dumps(
+                    {
+                        "level": 3,
+                        "confidence": 0.88,
+                        "recency_score": 0.7,
+                        "breadth_score": 0.4,
+                        "depth_score": 0.8,
+                        "artifact_score": 0.6,
+                        "teaching_score": 0.2,
+                        "freshness": "active",
+                        "status": "active",
+                        "manual_note": None,
+                        "rationale": "recovered on retry",
+                    }
+                )
+            response = {"choices": [{"message": {"content": content}}]}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode("utf-8"))
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A003
+            del format, args
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        monkeypatch.setenv("TEST_OPENAI_COMPATIBLE_KEY", "test-key")
+        config = TracciaConfig.model_validate(
+            {
+                "project_name": "fixture-traccia",
+                "backend": {
+                    "provider": "openai_compatible",
+                    "model": "stub-model",
+                    "api_key_env": "TEST_OPENAI_COMPATIBLE_KEY",
+                    "base_url": f"http://127.0.0.1:{server.server_port}",
+                    "api_style": "chat_completions",
+                    "structured_output_mode": "json_schema",
+                    "timeout_seconds": 5,
+                    "max_retries": 3,
+                },
+            }
+        )
+        backend = OpenAICompatibleBackend(config)
+
+        payload = backend.score_skill(
+            prompt="Return a score payload.",
+            request=ScoringRequest(
+                skill=build_skill_node("Python"),
+                evidence_items=[
+                    EvidenceItem.model_validate(
+                        {
+                            "evidence_id": "ev_python",
+                            "source_id": "src_python",
+                            "span_start": 0,
+                            "span_end": 10,
+                            "quote": "Built a Python CLI.",
+                            "evidence_type": "implemented",
+                            "signal_class": "artifact_backed_work",
+                            "skill_candidates": ["Python"],
+                            "artifact_candidates": [],
+                            "time_reference": "2026-04-01",
+                            "reliability": "tier_a",
+                            "extractor_version": "phase-0",
+                            "confidence": 0.9,
+                        }
+                    )
+                ],
+                thresholds={"consumption_max_level": 2},
+                locked=False,
+                hidden=False,
+            ),
+        )
+
+        assert payload.rationale == "recovered on retry"
+        assert attempts["count"] == 3
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_openai_compatible_backend_uses_longer_backoff_for_auth_unavailable(monkeypatch) -> None:
+    attempts = {"count": 0}
+    sleep_calls: list[float] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path != "/chat/completions":
+                self.send_error(404)
+                return
+            attempts["count"] += 1
+            if attempts["count"] < 3:
+                body = {
+                    "error": {
+                        "message": "auth_unavailable: no auth available (providers=star-gemini-bridge, model=star-gemini-3-flash)",
+                        "type": "server_error",
+                        "code": "internal_server_error",
+                    }
+                }
+                self.send_response(503)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(body).encode("utf-8"))
+                return
+
+            content = json.dumps(
+                {
+                    "level": 3,
+                    "confidence": 0.88,
+                    "recency_score": 0.7,
+                    "breadth_score": 0.4,
+                    "depth_score": 0.8,
+                    "artifact_score": 0.6,
+                    "teaching_score": 0.2,
+                    "freshness": "active",
+                    "status": "active",
+                    "manual_note": None,
+                    "rationale": "recovered after auth retry",
+                }
+            )
+            response = {"choices": [{"message": {"content": content}}]}
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(response).encode("utf-8"))
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A003
+            del format, args
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        monkeypatch.setattr(llm_module.time, "sleep", sleep_calls.append)
+        monkeypatch.setenv("TEST_OPENAI_COMPATIBLE_KEY", "test-key")
+        config = TracciaConfig.model_validate(
+            {
+                "project_name": "fixture-traccia",
+                "backend": {
+                    "provider": "openai_compatible",
+                    "model": "stub-model",
+                    "api_key_env": "TEST_OPENAI_COMPATIBLE_KEY",
+                    "base_url": f"http://127.0.0.1:{server.server_port}",
+                    "api_style": "chat_completions",
+                    "structured_output_mode": "json_schema",
+                    "timeout_seconds": 5,
+                    "max_retries": 3,
+                },
+            }
+        )
+        backend = OpenAICompatibleBackend(config)
+
+        payload = backend.score_skill(
+            prompt="Return a score payload.",
+            request=ScoringRequest(
+                skill=build_skill_node("Python"),
+                evidence_items=[
+                    EvidenceItem.model_validate(
+                        {
+                            "evidence_id": "ev_python",
+                            "source_id": "src_python",
+                            "span_start": 0,
+                            "span_end": 10,
+                            "quote": "Built a Python CLI.",
+                            "evidence_type": "implemented",
+                            "signal_class": "artifact_backed_work",
+                            "skill_candidates": ["Python"],
+                            "artifact_candidates": [],
+                            "time_reference": "2026-04-01",
+                            "reliability": "tier_a",
+                            "extractor_version": "phase-0",
+                            "confidence": 0.9,
+                        }
+                    )
+                ],
+                thresholds={"consumption_max_level": 2},
+                locked=False,
+                hidden=False,
+            ),
+        )
+
+        assert payload.rationale == "recovered after auth retry"
+        assert sleep_calls[:2] == [5.0, 10.0]
     finally:
         server.shutdown()
         thread.join(timeout=5)

@@ -33,6 +33,14 @@ most archive tools are good at storing material and bad at telling the skill sto
 
 if you just want the shortest path from a clone, use the editable tool install once and then call `traccia` directly.
 
+document normalization providers are optional because some of them are heavy. the base install keeps the core CLI light, while the document stack can be added when you actually need high-quality local PDF and DOCX parsing:
+
+| extra | command | what it adds |
+| --- | --- | --- |
+| docling only | `uv sync --extra docling` | local markdown conversion plus local OCR backends such as tesseract, easyocr, and rapidocr |
+| marker only | `uv sync --extra marker` | stronger local PDF-to-markdown conversion, especially for layout-heavy PDFs |
+| full local document stack | `uv sync --extra document-markdown` | marker + docling + markitdown fallback chain |
+
 ## first run
 
 ```bash
@@ -78,6 +86,81 @@ any provider that clones the same request and response shape can be used by swap
 | `api_style` | `chat_completions` | the only live API style supported right now |
 | `structured_output_mode` | `json_schema` | primary structured-output mode; `json_object` is also supported |
 
+## document normalization
+
+`traccia` now treats document normalization and OCR as separate concerns. that split is deliberate. converting a file into clean markdown is one problem. deciding how to recover text from scanned pages or embedded images is another.
+
+the default path is local-first and format-aware:
+
+| input | default `auto` chain | why |
+| --- | --- | --- |
+| pdf | `marker -> docling -> markitdown -> native` | marker is the strongest local PDF path here for layout-heavy markdown output, docling is the strongest local OCR-capable fallback, markitdown is a lighter markdown fallback, native is last-resort plain text |
+| docx | `docling -> markitdown -> native` | docling is the better structured local default for office documents, while markitdown remains a useful markdown fallback |
+
+the providers do different jobs:
+
+| provider | what it is for | tradeoff |
+| --- | --- | --- |
+| `auto` | best default, local-first fallback chain | behavior depends on installed optional tools |
+| `marker` | strongest wired local PDF markdown path | heavier dependency, currently wired for PDF only in `traccia` |
+| `docling` | best all-around local document parser with local OCR backends | larger install than the base package |
+| `markitdown` | lightweight markdown-oriented fallback | weaker on difficult scanned/layout-heavy documents |
+| `native` | plain text extraction only | lowest fidelity, but minimal dependencies |
+
+OCR is configured separately:
+
+| `ocr_provider` | effect |
+| --- | --- |
+| `auto` | use the provider's local automatic OCR path; for docling this means local OCR engine auto-detection |
+| `none` | disable OCR entirely and only use extractable document text |
+| `tesseract` / `tesseract_cli` / `easyocr` / `rapidocr` | force a specific local docling OCR backend |
+
+that means OCR is no longer tied to OpenAI or any hosted vision API. if you want the whole stack local and free, keep the backend fake or point the scoring backend somewhere else entirely. the document parser does not need OpenAI for OCR anymore.
+
+### enable or disable it
+
+the default config is already:
+
+```yaml
+document_normalization:
+  provider: auto
+  ocr_provider: auto
+```
+
+force the strongest wired local PDF path:
+
+```yaml
+document_normalization:
+  provider: marker
+  ocr_provider: auto
+```
+
+disable marker and keep everything in the docling lane:
+
+```yaml
+document_normalization:
+  provider: docling
+  ocr_provider: auto
+```
+
+disable OCR completely:
+
+```yaml
+document_normalization:
+  provider: auto
+  ocr_provider: none
+```
+
+fall all the way back to plain-text extraction:
+
+```yaml
+document_normalization:
+  provider: native
+  ocr_provider: none
+```
+
+the practical difference is simple. if your PDFs are born-digital and layout-heavy, `marker` is usually the best local first try. if your documents are scanned, mixed, multilingual, or need a specific free OCR engine, `docling` is the more controllable path. `markitdown` stays useful as a lighter markdown fallback, not as the main OCR system.
+
 ## what it does today
 
 the current build already handles immutable source intake into `raw/imported/`, file-by-file parsing with span tracking, source classification across authored material and activity traces, and evidence extraction that tries to separate real work from ambient interest. the graph layer creates canonical skill nodes, keeps a review queue for uncertain additions, and stores person-specific state such as level, confidence, freshness, historical peak, first seen, first learned, first strong evidence, estimated acquisition timing, acquisition basis, and core-self centrality.
@@ -92,7 +175,7 @@ the rendering side produces markdown node pages, profile exports, `graph.json`, 
 | --- | --- | --- |
 | authored material | markdown, plain text, docs, notes, READMEs | parsed directly and cited back with spans where possible |
 | code and technical artifacts | python, js, ts, tsx, rust, go, sql | treated as stronger evidence when they show actual implementation work |
-| structured exports | json, csv, pdf, docx | parsed into document records and evidence candidates |
+| structured exports | json, csv, pdf, docx | parsed into document records and evidence candidates, with local markdown normalization for documents when optional providers are installed |
 | activity exports | AI conversation JSON, reddit JSON, google activity JSON | normalized into a common structure before evidence extraction |
 | broader archive direction | social profiles, issue trackers, twitter or x exports, more takeout-style dumps | explicitly in scope for future expansion, but not all implemented yet |
 

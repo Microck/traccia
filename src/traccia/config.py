@@ -58,6 +58,11 @@ class BackendConfig(TracciaModel):
     max_retries: int = 3
 
 
+class DocumentNormalizationConfig(TracciaModel):
+    provider: str = "auto"
+    ocr_provider: str = "auto"
+
+
 class TracciaConfig(TracciaModel):
     schema_version: int = 1
     project_name: str = "traccia"
@@ -67,6 +72,9 @@ class TracciaConfig(TracciaModel):
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     rendering: RenderingConfig = Field(default_factory=RenderingConfig)
     backend: BackendConfig = Field(default_factory=BackendConfig)
+    document_normalization: DocumentNormalizationConfig = Field(
+        default_factory=DocumentNormalizationConfig
+    )
 
 
 def default_config(project_name: str = "traccia") -> TracciaConfig:
