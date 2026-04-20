@@ -4,10 +4,31 @@
 </div>
 
 <p align="center">
+  <img src="https://img.shields.io/github/actions/workflow/status/Microck/traccia/ci.yml?branch=main&style=flat-square&label=ci" alt="ci badge">
+  <img src="https://img.shields.io/pypi/v/traccia?style=flat-square&color=000000" alt="pypi version badge">
   <img src="https://img.shields.io/badge/python-3.12%2B-000000?style=flat-square" alt="python badge">
   <img src="https://img.shields.io/badge/license-MIT-000000?style=flat-square" alt="mit license badge">
 </p>
 
+---
+
+## table of contents
+
+- [why](#why)
+- [install](#install)
+- [first run](#first-run)
+- [backend surface](#backend-surface)
+- [document normalization](#document-normalization)
+- [what it does today](#what-it-does-today)
+- [input surface](#input-surface)
+- [output surface](#output-surface)
+- [scoring stance](#scoring-stance)
+- [command surface](#command-surface)
+- [repo map](#repo-map)
+- [verification](#verification)
+- [automation](#automation)
+- [contributing](#contributing)
+- [license](#license)
 
 ---
 
@@ -223,16 +244,30 @@ the full command list lives behind `traccia --help`, but the current working sur
 | command | use |
 | --- | --- |
 | `traccia init` | scaffold a new project |
+| `traccia lint` | validate project structure and config |
 | `traccia doctor` | verify the scaffold and backend config |
+| `traccia add` | add a single file to the import queue |
+| `traccia add-dir` | add all files in a directory to the import queue |
 | `traccia discover-dir` | classify a directory before ingest and show family/subproduct counts |
-| `traccia ingest` / `traccia ingest-dir` | import files into the graph pipeline |
+| `traccia ingest` | import queued files into the graph pipeline |
+| `traccia ingest-dir` | import a full directory into the graph pipeline |
+| `traccia reingest` | re-import files that have already been seen |
+| `traccia watch` | watch for file changes and re-import automatically |
 | `traccia rebuild` | recompute the graph from stored material |
+| `traccia render` | re-render markdown and static output from the current graph |
 | `traccia tree` | print the current tree |
+| `traccia node` | print a single skill node |
 | `traccia explain` / `traccia why` | inspect one skill node |
 | `traccia evidence` | list evidence connected to a skill |
 | `traccia review` | process uncertain graph changes |
-| `traccia alias` | manage canonical aliases |
-| `traccia export ...` | write graph, profile, markdown, and obsidian projections |
+| `traccia lock` | lock a skill node to prevent automatic updates |
+| `traccia hide` | hide a skill node from rendered output |
+| `traccia stats` | show project statistics |
+| `traccia alias add` | add a canonical skill alias |
+| `traccia export graph` | write `graph.json` |
+| `traccia export profile` | write profile-style summary |
+| `traccia export skill-md` | write per-skill markdown pages |
+| `traccia export obsidian` | write obsidian-friendly note graph export |
 
 ## repo map
 
@@ -260,6 +295,19 @@ the live external backend path still depends on real credentials and a reachable
 ## automation
 
 github actions now handle the basic release path for the repo. pushes and pull requests run lint, tests, package builds, and a CLI smoke check. version tags matching `v*` build release artifacts and attach them to a github release. pypi publishing is wired for trusted publishing as an opt-in path, and only runs when the repository variable `PYPI_PUBLISH=true` is set and the repository has been registered as a trusted publisher on pypi.
+
+## contributing
+
+contributions are welcome. the workflow is straightforward:
+
+1. fork the repository
+2. create a feature branch from `main`
+3. make your changes
+4. run `uv run ruff check src tests` and `uv run pytest -q` before pushing
+5. open a pull request against `main`
+
+please keep changes focused and include tests for new behavior. see `docs/spec.md` and `docs/decisions.md` for architectural context.
+
 ## license
 
-mit
+[MIT](LICENSE) — copyright © 2026 Microck.
