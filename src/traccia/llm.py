@@ -77,7 +77,9 @@ class LLMBackend(Protocol):
     def extract_evidence(self, *, prompt: str, document: ParsedDocument) -> list[EvidenceItem]:
         ...
 
-    def canonicalize(self, *, prompt: str, request: CanonicalizationRequest) -> CanonicalSkillDecision:
+    def canonicalize(
+        self, *, prompt: str, request: CanonicalizationRequest,
+    ) -> CanonicalSkillDecision:
         ...
 
     def score_skill(self, *, prompt: str, request: ScoringRequest) -> ScorePayload:
@@ -92,7 +94,9 @@ class FakeLLMBackend:
         del prompt
         return fake_extract_evidence(document).evidence_items
 
-    def canonicalize(self, *, prompt: str, request: CanonicalizationRequest) -> CanonicalSkillDecision:
+    def canonicalize(
+        self, *, prompt: str, request: CanonicalizationRequest,
+    ) -> CanonicalSkillDecision:
         del prompt
         support_bucket = {
             "evidence": request.evidence_items,
@@ -109,7 +113,11 @@ class FakeLLMBackend:
             skill = build_skill_node(request.candidate_name)
             return CanonicalSkillDecision(
                 candidate_name=request.candidate_name,
-                action="use_existing" if any(row["name"] == request.candidate_name for row in request.existing_skills) else "create",
+                action=(
+                    "use_existing"
+                    if any(row["name"] == request.candidate_name for row in request.existing_skills)
+                    else "create"
+                ),
                 canonical_name=skill.name,
                 skill_id=skill.skill_id,
                 reason="Strong enough support for canonical node creation.",
@@ -157,7 +165,8 @@ class OpenAICompatibleBackend:
         api_key = os.getenv(config.backend.api_key_env)
         if not api_key:
             raise BackendError(
-                f"Missing required API key in env var {config.backend.api_key_env} for provider {config.backend.provider}."
+                "Missing required API key in env var "
+                f"{config.backend.api_key_env} for provider {config.backend.provider}."
             )
         self.api_key = api_key
         self.config = config
@@ -175,7 +184,9 @@ class OpenAICompatibleBackend:
         )
         return payload.evidence_items
 
-    def canonicalize(self, *, prompt: str, request: CanonicalizationRequest) -> CanonicalSkillDecision:
+    def canonicalize(
+        self, *, prompt: str, request: CanonicalizationRequest,
+    ) -> CanonicalSkillDecision:
         return self._invoke_schema(
             schema_model=CanonicalSkillDecision,
             schema_name="canonical_skill_decision",
@@ -191,12 +202,16 @@ class OpenAICompatibleBackend:
             user_prompt=_scoring_payload(request),
         )
 
-    def _invoke_schema(self, *, schema_model, schema_name: str, system_prompt: str, user_prompt: str):
+    def _invoke_schema(
+        self, *, schema_model, schema_name: str, system_prompt: str, user_prompt: str,
+    ):
         response_format = self._response_format(schema_model=schema_model, schema_name=schema_name)
         body = {
             "model": self.config.backend.model,
             "messages": [
-                {"role": "system", "content": self._system_prompt_for_schema(system_prompt, schema_model)},
+                {"role": "system", "content": self._system_prompt_for_schema(
+                    system_prompt, schema_model,
+                )},
                 {"role": "user", "content": user_prompt},
             ],
             "response_format": response_format,
@@ -254,7 +269,8 @@ class OpenAICompatibleBackend:
             except error.HTTPError as exc:
                 body = exc.read().decode("utf-8", errors="replace")
                 last_error = BackendError(f"LLM backend request failed ({exc.code}): {body}")
-                if exc.code not in {408, 409, 429, 500, 502, 503, 504} or attempt_index == retries - 1:
+                if exc.code not in {408, 409, 429, 500, 502, 503, 504} \
+                        or attempt_index == retries - 1:
                     raise last_error from exc
             except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
                 last_error = BackendError(f"LLM backend request failed: {exc}")
@@ -342,7 +358,10 @@ def _document_payload(document: ParsedDocument) -> str:
     ]
     for span in document.spans:
         lines.append(
-            f"- span_id={span.span_id} line_start={span.line_start} line_end={span.line_end} text={span.text}"
+            f"- span_id={span.span_id} "
+            f"line_start={span.line_start} "
+            f"line_end={span.line_end} "
+            f"text={span.text}"
         )
     return "\n".join(lines)
 
@@ -351,7 +370,10 @@ def _canonicalization_payload(request: CanonicalizationRequest) -> str:
     lines = [f"candidate_name: {request.candidate_name}", "evidence:"]
     for item in request.evidence_items:
         lines.append(
-            f"- evidence_id={item.evidence_id} type={item.evidence_type.value} signal_class={item.signal_class.value} confidence={item.confidence} quote={item.quote}"
+            f"- evidence_id={item.evidence_id} type={item.evidence_type.value} "
+            f"signal_class={item.signal_class.value} "
+            f"confidence={item.confidence} "
+            f"quote={item.quote}"
         )
     lines.append("existing_skills:")
     for row in request.existing_skills:
@@ -368,6 +390,9 @@ def _scoring_payload(request: ScoringRequest) -> str:
     ]
     for item in request.evidence_items:
         lines.append(
-            f"- evidence_id={item.evidence_id} type={item.evidence_type.value} signal_class={item.signal_class.value} confidence={item.confidence} quote={item.quote}"
+            f"- evidence_id={item.evidence_id} type={item.evidence_type.value} "
+            f"signal_class={item.signal_class.value} "
+            f"confidence={item.confidence} "
+            f"quote={item.quote}"
         )
     return "\n".join(lines)

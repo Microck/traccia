@@ -20,6 +20,9 @@ app.add_typer(alias_app, name="alias")
 app.add_typer(export_app, name="export")
 
 
+_PROJECT_ROOT_HELP = "Initialized traccia repository."
+
+
 def _project_config_path(project_root: Path) -> Path:
     return project_root / "config" / "config.yaml"
 
@@ -76,13 +79,14 @@ def doctor(
     if not _project_config_path(project_root).exists():
         missing_paths.append("config/config.yaml")
 
-    for directory in DIRECTORIES:
-        if not (project_root / directory).exists():
-            missing_paths.append(directory)
-
-    for relative_path in (*FILES.keys(), *JSON_FILES.keys(), "state/catalog.sqlite"):
-        if not (project_root / relative_path).exists():
-            missing_paths.append(relative_path)
+    missing_paths.extend(
+        d for d in DIRECTORIES if not (project_root / d).exists()
+    )
+    missing_paths.extend(
+        p
+        for p in (*FILES.keys(), *JSON_FILES.keys(), "state/catalog.sqlite")
+        if not (project_root / p).exists()
+    )
 
     if missing_paths:
         for missing_path in missing_paths:
@@ -99,7 +103,8 @@ def doctor(
         typer.echo(f"backend auth: found env var {config.backend.api_key_env}")
     else:
         typer.echo(
-            f"backend auth: missing env var {config.backend.api_key_env} for provider {config.backend.provider}"
+            "backend auth: missing env var "
+            f"{config.backend.api_key_env} for provider {config.backend.provider}"
         )
         if check_backend:
             raise typer.Exit(code=1)
@@ -117,7 +122,7 @@ def doctor(
 @app.command()
 def add(
     path: Path,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     imported_path = _pipeline(project_root).add_file(path.resolve())
     typer.echo(f"added: {imported_path}")
@@ -126,7 +131,7 @@ def add(
 @app.command("add-dir")
 def add_dir(
     path: Path,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     count = _pipeline(project_root).add_directory(path.resolve())
     typer.echo(f"added={count}")
@@ -135,7 +140,7 @@ def add_dir(
 @app.command()
 def reingest(
     source_id: str,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     processed = _pipeline(project_root).reingest(source_id)
     typer.echo(f"reingest source_id={source_id} processed={int(processed)}")
@@ -144,7 +149,7 @@ def reingest(
 @app.command()
 def watch(
     path: Path,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
     interval_seconds: int = typer.Option(2, "--interval-seconds", help="Polling interval in seconds."),
 ) -> None:
     _pipeline(project_root).watch(path.resolve(), interval_seconds=interval_seconds)
@@ -153,7 +158,7 @@ def watch(
 @app.command()
 def ingest(
     path: Path,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     _, processed = _pipeline(project_root).ingest_file(path.resolve(), root=path.parent.resolve())
     _pipeline(project_root).recompute_graph()
@@ -164,17 +169,20 @@ def ingest(
 @app.command("ingest-dir")
 def ingest_dir(
     path: Path,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     result = _pipeline(project_root).ingest_directory(path.resolve())
     typer.echo(
-        f"imported={result.imported} processed={result.processed} skipped={result.skipped} deleted={result.deleted}"
+        f"imported={result.imported} "
+        f"processed={result.processed} "
+        f"skipped={result.skipped} "
+        f"deleted={result.deleted}"
     )
 
 
 @app.command()
 def rebuild(
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     result = _pipeline(project_root).rebuild()
     typer.echo(f"rebuilt={result.processed}")
@@ -182,7 +190,7 @@ def rebuild(
 
 @app.command()
 def render(
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     render_project(project_root.resolve(), storage=_storage(project_root))
     typer.echo(f"rendered={project_root.resolve()}")
@@ -191,7 +199,7 @@ def render(
 @app.command()
 def tree(
     format: str = typer.Option("ascii", "--format", help="ascii or mermaid"),
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     if format == "mermaid":
         typer.echo(mermaid_tree(project_root.resolve()))
@@ -202,7 +210,7 @@ def tree(
 @app.command()
 def node(
     skill_id: str,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     typer.echo(_skill_markdown_path(project_root.resolve(), skill_id).read_text())
 
@@ -210,7 +218,7 @@ def node(
 @app.command()
 def explain(
     skill_or_alias: str,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     row = _storage(project_root).find_skill_by_lookup(skill_or_alias)
     if not row:
@@ -221,7 +229,7 @@ def explain(
 @app.command()
 def why(
     skill_id: str,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     explain(skill_id, project_root)
 
@@ -229,7 +237,7 @@ def why(
 @app.command()
 def evidence(
     skill_id: str,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     row = _storage(project_root).find_skill_by_lookup(skill_id)
     if not row:
@@ -242,7 +250,7 @@ def evidence(
 
 @app.command()
 def viewer(
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     typer.echo((project_root.resolve() / "viewer" / "index.html").as_uri())
 
@@ -251,7 +259,7 @@ def viewer(
 def review(
     accept: str | None = typer.Option(None, "--accept", help="Accept a review item."),
     reject: str | None = typer.Option(None, "--reject", help="Reject a review item."),
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     storage = _storage(project_root)
     if accept:
@@ -293,7 +301,7 @@ def review(
 @app.command()
 def lock(
     skill_id: str,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     storage = _storage(project_root)
     row = storage.find_skill_by_lookup(skill_id)
@@ -313,7 +321,7 @@ def lock(
 @app.command()
 def hide(
     skill_id: str,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     storage = _storage(project_root)
     row = storage.find_skill_by_lookup(skill_id)
@@ -334,7 +342,7 @@ def hide(
 def alias_add(
     skill_id: str,
     alias: str,
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     storage = _storage(project_root)
     row = storage.find_skill_by_lookup(skill_id)
@@ -353,7 +361,7 @@ def alias_add(
 
 @export_app.command("graph")
 def export_graph(
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     render_project(project_root.resolve(), storage=_storage(project_root))
     typer.echo(project_root.resolve() / "graph" / "graph.json")
@@ -361,7 +369,7 @@ def export_graph(
 
 @export_app.command("profile")
 def export_profile(
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     render_project(project_root.resolve(), storage=_storage(project_root))
     typer.echo(project_root.resolve() / "profile" / "skill.md")
@@ -369,7 +377,7 @@ def export_profile(
 
 @export_app.command("skill-md")
 def export_skill_md(
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     render_project(project_root.resolve(), storage=_storage(project_root))
     typer.echo(project_root.resolve() / "tree" / "nodes")
@@ -377,7 +385,7 @@ def export_skill_md(
 
 @export_app.command("obsidian")
 def export_obsidian_command(
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     render_project(project_root.resolve(), storage=_storage(project_root))
     typer.echo(export_obsidian(project_root.resolve()))
@@ -385,7 +393,7 @@ def export_obsidian_command(
 
 @app.command()
 def stats(
-    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    project_root: Path = typer.Option(Path("."), "--project-root", help=_PROJECT_ROOT_HELP),
 ) -> None:
     storage = _storage(project_root)
     typer.echo(f"sources: {len(storage.list_sources())}")
