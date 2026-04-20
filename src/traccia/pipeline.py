@@ -3,17 +3,30 @@ from __future__ import annotations
 import json
 import shutil
 import time
+import zipfile
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Iterator
 
 from traccia.config import load_config
-from traccia.llm import CanonicalizationRequest, ScoringRequest, backend_from_config, load_prompt
+from traccia.llm import (
+    CanonicalizationRequest,
+    LLMBackend,
+    ScoringRequest,
+    backend_from_config,
+    load_prompt,
+)
 from traccia.models import (
     EvidenceItem,
     FreshnessState,
+    IngestManifest,
+    IngestManifestEntry,
+    IngestMaterialStatus,
     NodeStatus,
+    ParsedDocument,
+    ParsedSpan,
     PersonSkillState,
     PersonSkillStatus,
     ReviewItem,
@@ -21,21 +34,62 @@ from traccia.models import (
     SkillEdge,
     SkillKind,
     SkillNode,
+    SourceFamily,
 )
-from traccia.parsers import parse_document, supported_file
+from traccia.parsers import ingestable_file, parse_document, sniff_text_bytes
 from traccia.pipeline_support import build_skill_node, support_score
 from traccia.rendering import render_project
+from traccia.source_detection import (
+    FamilyDetection,
+    detect_source_family_from_archive,
+    detect_source_family_from_path,
+    refine_archive_member_detection,
+)
 from traccia.storage import Storage
 from traccia.taxonomy import DOMAINS
-from traccia.utils import iso_now, short_hash, skill_id, slugify, source_id_for_relative_path
+from traccia.utils import (
+    iso_now,
+    short_hash,
+    skill_id,
+    slugify,
+    source_id_for_relative_path,
+)
 
 
 @dataclass(slots=True)
 class BatchResult:
+    discovered: int = 0
     processed: int = 0
     skipped: int = 0
     imported: int = 0
     deleted: int = 0
+    failed: int = 0
+
+@dataclass(slots=True)
+class DiscoverySummary:
+    total_materials: int = 0
+    direct_files: int = 0
+    archive_members: int = 0
+    by_root: dict[str, int] = field(default_factory=dict)
+    by_family: dict[str, int] = field(default_factory=dict)
+    by_family_subproduct: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ImportMaterial:
+    source_path: Path
+    relative_import_path: Path
+    source_family: SourceFamily
+    source_family_subproduct: str | None
+    detection_reason: str
+    archive_member: str | None = None
+
+
+ARCHIVE_SUFFIXES = {".zip"}
+# Small span batches are materially more stable across OpenAI-compatible proxies
+# than large document chunks when running long export ingests.
+MAX_EXTRACTION_SPANS = 6
+MAX_EXTRACTION_CHARACTERS = 12_000
 
 
 class Pipeline:
@@ -43,56 +97,201 @@ class Pipeline:
         self.project_root = project_root.resolve()
         self.storage = Storage(self.project_root)
         self.config = load_config(self.project_root / "config" / "config.yaml")
-        self.backend = backend_from_config(self.config)
+        self._backend: LLMBackend | None = None
+
+    @property
+    def backend(self) -> LLMBackend:
+        if self._backend is None:
+            self._backend = backend_from_config(self.config)
+        return self._backend
+
+    @backend.setter
+    def backend(self, value: LLMBackend) -> None:
+        self._backend = value
 
     def add_file(self, path: Path) -> Path:
-        imported_path = self._import_path_for(path=path, root=path.parent)
-        imported_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, imported_path)
-        return imported_path
+        materials = self._materials_for_path(path=path, root=path.parent)
+        if not materials:
+            raise ValueError(f"No ingestable material found in {path}")
+        imported_paths = [self._import_material(material) for material in materials]
+        if len(imported_paths) == 1:
+            return imported_paths[0]
+        return imported_paths[0].parent
 
     def add_directory(self, root: Path) -> int:
-        count = 0
-        for path in self._discover_files(root):
-            self.add_file(path)
-            count += 1
-        return count
+        materials = self._discover_materials(root)
+        for material in materials:
+            self._import_material(material)
+        return len(materials)
+
+    def discover_directory(self, root: Path) -> DiscoverySummary:
+        materials = self._discover_materials(root)
+        return self._summarize_materials(materials)
 
     def ingest_file(self, path: Path, *, root: Path | None = None, force: bool = False) -> tuple[str, bool]:
-        imported_path = self._import_external_source(path=path, root=root or path.parent)
-        relative_import_path = imported_path.relative_to(self.project_root / "raw" / "imported")
-        parsed_document = parse_document(imported_path, project_relative_path=relative_import_path)
-        previous_source = self.storage.fetch_source(parsed_document.source.source_id)
-        if previous_source and previous_source["sha256"] == parsed_document.source.sha256 and not force:
-            return parsed_document.source.source_id, False
+        materials = self._materials_for_path(path=path, root=root or path.parent)
+        if not materials:
+            raise ValueError(f"No ingestable material found in {path}")
 
-        self.storage.upsert_source(parsed_document.source)
-        self.storage.replace_source_spans(parsed_document.source.source_id, parsed_document.spans)
-        self._write_parsed_artifact(parsed_document)
-
-        evidence_items = self.backend.extract_evidence(
-            prompt=load_prompt(self.project_root, "extract_evidence.md"),
-            document=parsed_document,
+        processed_any = False
+        first_source_id: str | None = None
+        manifest_entries: list[IngestManifestEntry] = []
+        for material in materials:
+            source_id, processed = self._ingest_material(material, force=force)
+            if first_source_id is None:
+                first_source_id = source_id
+            processed_any = processed_any or processed
+            manifest_entries.append(
+                IngestManifestEntry(
+                    relative_import_path=material.relative_import_path.as_posix(),
+                    source_path=material.source_path.resolve().as_posix(),
+                    archive_member=material.archive_member,
+                    source_family=material.source_family,
+                    source_family_subproduct=material.source_family_subproduct,
+                    detection_reason=material.detection_reason,
+                    status=IngestMaterialStatus.PROCESSED if processed else IngestMaterialStatus.SKIPPED,
+                    source_id=source_id,
+                )
+            )
+        self._write_ingest_manifest(root=root or path.parent, entries=manifest_entries)
+        fallback_source_id = source_id_for_relative_path(
+            self._relative_import_path_for(path=path, root=root or path.parent)
         )
-        self.storage.replace_source_evidence(parsed_document.source.source_id, evidence_items)
-        self._write_evidence_artifact(parsed_document.source.source_id, evidence_items)
-        return parsed_document.source.source_id, True
+        return first_source_id or fallback_source_id, processed_any
 
     def ingest_directory(self, root: Path, *, force: bool = False) -> BatchResult:
         result = BatchResult()
-        files = self._discover_files(root)
-        result.deleted = self._sync_import_scope(root=root, current_files=files)
-        for path in files:
-            _, processed = self.ingest_file(path, root=root, force=force)
+        manifest_entries: dict[str, IngestManifestEntry] = {}
+        current_materials = self._discover_materials(root)
+        discovery = self._summarize_materials(current_materials)
+        result.discovered = discovery.total_materials
+        total_materials = len(current_materials)
+
+        self._append_log(
+            (
+                f"- {iso_now()}: ingest-discovered root={root.resolve()} "
+                f"materials={discovery.total_materials} direct_files={discovery.direct_files} "
+                f"archive_members={discovery.archive_members} "
+                f"by_root={_format_counts(discovery.by_root)} "
+                f"by_family={_format_counts(discovery.by_family)} "
+                f"by_family_subproduct={_format_counts(discovery.by_family_subproduct)}"
+            )
+        )
+        self._write_progress(
+            status="running",
+            root=root,
+            result=result,
+            discovery=discovery,
+            total_materials=total_materials,
+        )
+
+        for index, material in enumerate(current_materials, start=1):
+            entry = manifest_entries.setdefault(
+                material.relative_import_path.as_posix(),
+                IngestManifestEntry(
+                    relative_import_path=material.relative_import_path.as_posix(),
+                    source_path=material.source_path.resolve().as_posix(),
+                    archive_member=material.archive_member,
+                    source_family=material.source_family,
+                    source_family_subproduct=material.source_family_subproduct,
+                    detection_reason=material.detection_reason,
+                    status=IngestMaterialStatus.DISCOVERED,
+                ),
+            )
+            entry = manifest_entries[material.relative_import_path.as_posix()]
+            self._append_log(
+                " ".join(
+                    [
+                        f"- {iso_now()}: material-start",
+                        f"index={index}/{total_materials}",
+                        f"relative_import_path={material.relative_import_path.as_posix()}",
+                        f"family={material.source_family.value}",
+                        f"subproduct={material.source_family_subproduct or '-'}",
+                        f"archive_member={material.archive_member or '-'}",
+                    ]
+                )
+            )
+            self._write_progress(
+                status="running",
+                root=root,
+                result=result,
+                discovery=discovery,
+                total_materials=total_materials,
+                current_index=index,
+                current_material=material,
+            )
+            try:
+                source_id, processed = self._ingest_material(material, force=force)
+            except Exception as exc:
+                result.failed += 1
+                entry.status = IngestMaterialStatus.FAILED
+                self._append_log(
+                    " ".join(
+                        [
+                            f"- {iso_now()}: material-failed",
+                            f"index={index}/{total_materials}",
+                            f"path={material.source_path.resolve()}",
+                            f"relative_import_path={material.relative_import_path.as_posix()}",
+                            f"error={type(exc).__name__}:{exc}",
+                        ]
+                    )
+                )
+                self._write_progress(
+                    status="running",
+                    root=root,
+                    result=result,
+                    discovery=discovery,
+                    total_materials=total_materials,
+                    current_index=index,
+                    current_material=material,
+                )
+                continue
+
             result.imported += 1
+            entry.source_id = source_id
             if processed:
                 result.processed += 1
+                entry.status = IngestMaterialStatus.PROCESSED
             else:
                 result.skipped += 1
+                entry.status = IngestMaterialStatus.SKIPPED
+            self._append_log(
+                " ".join(
+                    [
+                        f"- {iso_now()}: material-finished",
+                        f"index={index}/{total_materials}",
+                        f"source_id={source_id}",
+                        f"status={entry.status.value}",
+                        f"relative_import_path={material.relative_import_path.as_posix()}",
+                    ]
+                )
+            )
+            self._write_progress(
+                status="running",
+                root=root,
+                result=result,
+                discovery=discovery,
+                total_materials=total_materials,
+                current_index=index,
+                current_material=material,
+            )
+        result.deleted = self._sync_import_scope(root=root, current_materials=current_materials)
+        self._write_ingest_manifest(root=root, entries=list(manifest_entries.values()))
         self.recompute_graph()
         render_project(self.project_root, storage=self.storage)
         self._append_log(
-            f"- {iso_now()}: ingest-dir root={root.resolve()} imported={result.imported} processed={result.processed} skipped={result.skipped} deleted={result.deleted}"
+            (
+                f"- {iso_now()}: ingest-dir root={root.resolve()} imported={result.imported} "
+                f"processed={result.processed} skipped={result.skipped} failed={result.failed} "
+                f"deleted={result.deleted}"
+            )
+        )
+        self._write_progress(
+            status="completed",
+            root=root,
+            result=result,
+            discovery=discovery,
+            total_materials=total_materials,
         )
         return result
 
@@ -111,16 +310,7 @@ class Pipeline:
         imported_root = self.project_root / "raw" / "imported"
         for path in self._discover_files(imported_root):
             relative_import_path = path.relative_to(imported_root)
-            parsed_document = parse_document(path, project_relative_path=relative_import_path)
-            self.storage.upsert_source(parsed_document.source)
-            self.storage.replace_source_spans(parsed_document.source.source_id, parsed_document.spans)
-            self._write_parsed_artifact(parsed_document)
-            evidence_items = self.backend.extract_evidence(
-                prompt=load_prompt(self.project_root, "extract_evidence.md"),
-                document=parsed_document,
-            )
-            self.storage.replace_source_evidence(parsed_document.source.source_id, evidence_items)
-            self._write_evidence_artifact(parsed_document.source.source_id, evidence_items)
+            self._rebuild_imported_path(path=path, relative_import_path=relative_import_path)
             result.processed += 1
         self.recompute_graph()
         render_project(self.project_root, storage=self.storage)
@@ -131,7 +321,7 @@ class Pipeline:
         last_seen: dict[str, str] = {}
         while True:
             changed = False
-            for path in self._discover_files(root):
+            for path in self._watch_roots(root):
                 current_stamp = f"{path.stat().st_mtime_ns}:{path.stat().st_size}"
                 if last_seen.get(str(path)) != current_stamp:
                     last_seen[str(path)] = current_stamp
@@ -321,37 +511,285 @@ class Pipeline:
         self.storage.sync_review_queue_file()
 
     def _discover_files(self, root: Path) -> list[Path]:
-        return [path for path in sorted(root.rglob("*")) if path.is_file() and supported_file(path)]
+        return [path for path in sorted(root.rglob("*")) if path.is_file() and ingestable_file(path)]
 
-    def _sync_import_scope(self, *, root: Path, current_files: list[Path]) -> int:
+    def _watch_roots(self, root: Path) -> list[Path]:
+        return [
+            path
+            for path in sorted(root.rglob("*"))
+            if path.is_file() and (ingestable_file(path) or self._is_archive(path))
+        ]
+
+    def _discover_materials(self, root: Path) -> list[ImportMaterial]:
+        return list(self._iter_materials(root))
+
+    def _iter_materials(self, root: Path) -> Iterator[ImportMaterial]:
+        seen_relative_paths: set[Path] = set()
+        for path in sorted(root.rglob("*")):
+            if not path.is_file():
+                continue
+            if not (ingestable_file(path) or self._is_archive(path)):
+                continue
+            for material in self._materials_for_path(path=path, root=root):
+                if material.relative_import_path in seen_relative_paths:
+                    continue
+                seen_relative_paths.add(material.relative_import_path)
+                yield material
+
+    def _materials_for_path(self, *, path: Path, root: Path) -> list[ImportMaterial]:
+        if self._is_archive(path):
+            return self._archive_materials(path=path, root=root)
+        if ingestable_file(path):
+            detection = detect_source_family_from_path(path.relative_to(root))
+            return [
+                ImportMaterial(
+                    source_path=path,
+                    relative_import_path=self._relative_import_path_for(path=path, root=root),
+                    source_family=detection.source_family,
+                    source_family_subproduct=detection.subproduct,
+                    detection_reason=detection.reason,
+                )
+            ]
+        return []
+
+    def _archive_materials(self, *, path: Path, root: Path) -> list[ImportMaterial]:
+        materials: list[ImportMaterial] = []
+        archive_root = self._archive_relative_root(path=path, root=root)
+        detection = detect_source_family_from_archive(path)
+        with zipfile.ZipFile(path) as archive:
+            for info in archive.infolist():
+                if info.is_dir():
+                    continue
+                member_path = Path(info.filename)
+                if self._unsafe_archive_member(member_path):
+                    continue
+                if not self._ingestable_archive_member(archive=archive, info=info):
+                    continue
+                member_detection = refine_archive_member_detection(
+                    archive_detection=detection,
+                    member_path=member_path,
+                )
+                materials.append(
+                    ImportMaterial(
+                        source_path=path,
+                        relative_import_path=archive_root / member_path,
+                        source_family=member_detection.source_family,
+                        source_family_subproduct=member_detection.subproduct,
+                        detection_reason=member_detection.reason,
+                        archive_member=info.filename,
+                    )
+                )
+        return materials
+
+    def _sync_import_scope(self, *, root: Path, current_materials: list[ImportMaterial]) -> int:
         current_source_ids = {
-            source_id_for_relative_path(self._relative_import_path_for(path=path, root=root))
-            for path in current_files
+            source_id_for_relative_path(material.relative_import_path) for material in current_materials
         }
         deleted = 0
-        scope_root = (self.project_root / "raw" / "imported" / slugify(root.name or "imported")).resolve()
+        scope_root = (self.project_root / "raw" / "imported" / slugify(root.name or "imported")).absolute()
         for source_row in self.storage.list_sources():
             if source_row["status"] == "deleted":
                 continue
-            source_uri = str(source_row["uri"])
-            if not source_uri.startswith("file://"):
+            metadata = json.loads(str(source_row["metadata_json"] or "{}"))
+            relative_import_path = metadata.get("relative_import_path")
+            if not isinstance(relative_import_path, str) or not relative_import_path:
                 continue
-            source_path = Path(source_uri.replace("file://", "")).resolve()
-            if not _path_within_scope(source_path, scope_root):
+            imported_path = (self.project_root / "raw" / "imported" / relative_import_path).absolute()
+            if not _path_within_scope(imported_path, scope_root):
                 continue
             if source_row["source_id"] in current_source_ids:
                 continue
             self.storage.mark_source_deleted(str(source_row["source_id"]))
             self.storage.delete_source_derived_records(str(source_row["source_id"]))
-            self._delete_source_artifacts(str(source_row["source_id"]), source_path)
+            self._delete_source_artifacts(str(source_row["source_id"]), imported_path)
             deleted += 1
         return deleted
 
-    def _import_external_source(self, *, path: Path, root: Path) -> Path:
-        destination = self._import_path_for(path=path, root=root)
+    def _ingest_material(self, material: ImportMaterial, *, force: bool) -> tuple[str, bool]:
+        imported_path = self._import_material(material)
+        parsed_document = self._parsed_document_for_material(material=material, imported_path=imported_path)
+        previous_source = self.storage.fetch_source(parsed_document.source.source_id)
+        if (
+            previous_source
+            and previous_source["sha256"] == parsed_document.source.sha256
+            and self._ingest_artifacts_complete(parsed_document.source.source_id)
+            and not force
+        ):
+            return parsed_document.source.source_id, False
+
+        self.storage.upsert_source(parsed_document.source)
+        self.storage.replace_source_spans(parsed_document.source.source_id, parsed_document.spans)
+        self._write_parsed_artifact(parsed_document)
+
+        evidence_items = self._extract_evidence_items(parsed_document, force=force)
+        self.storage.replace_source_evidence(parsed_document.source.source_id, evidence_items)
+        self._write_evidence_artifact(parsed_document.source.source_id, evidence_items)
+        self.storage.clear_extraction_checkpoints(parsed_document.source.source_id)
+        return parsed_document.source.source_id, True
+
+    def _ingest_artifacts_complete(self, source_id: str) -> bool:
+        parsed_artifact = self.project_root / "parsed" / f"{source_id}.json"
+        evidence_artifact = self.project_root / "evidence" / f"{source_id}.json"
+        return parsed_artifact.exists() and evidence_artifact.exists()
+
+    def _rebuild_imported_path(self, *, path: Path, relative_import_path: Path) -> None:
+        detection = detect_source_family_from_path(relative_import_path)
+        parsed_document = self._annotate_parsed_document(
+            parse_document(
+                path,
+                project_relative_path=relative_import_path,
+                config=self.config,
+                source_family=detection.source_family,
+                source_family_subproduct=detection.subproduct,
+            ),
+            detection=detection,
+            archive_member=None,
+        )
+        self.storage.upsert_source(parsed_document.source)
+        self.storage.replace_source_spans(parsed_document.source.source_id, parsed_document.spans)
+        self._write_parsed_artifact(parsed_document)
+        evidence_items = self._extract_evidence_items(parsed_document, force=True)
+        self.storage.replace_source_evidence(parsed_document.source.source_id, evidence_items)
+        self._write_evidence_artifact(parsed_document.source.source_id, evidence_items)
+        self.storage.clear_extraction_checkpoints(parsed_document.source.source_id)
+
+    def _extract_evidence_items(
+        self,
+        parsed_document: ParsedDocument,
+        *,
+        force: bool = False,
+    ) -> list[EvidenceItem]:
+        evidence_items: list[EvidenceItem] = []
+        prompt = load_prompt(self.project_root, "extract_evidence.md")
+        chunks = _chunk_document(parsed_document)
+        completed_chunks = self._resume_checkpoints_for_document(
+            parsed_document=parsed_document,
+            chunks=chunks,
+            force=force,
+        )
+
+        if completed_chunks:
+            self._append_log(
+                (
+                    f"- {iso_now()}: extraction-resume source_id={parsed_document.source.source_id} "
+                    f"completed_chunks={len(completed_chunks)}/{len(chunks)}"
+                )
+            )
+
+        for chunk_index, chunk in enumerate(chunks):
+            resumed_evidence = completed_chunks.get(chunk_index)
+            if resumed_evidence is not None:
+                evidence_items.extend(resumed_evidence)
+                continue
+
+            chunk_evidence = self.backend.extract_evidence(
+                prompt=prompt,
+                document=chunk,
+            )
+            self.storage.upsert_extraction_checkpoint(
+                source_id=parsed_document.source.source_id,
+                source_sha256=parsed_document.source.sha256,
+                extractor_version=self.config.pipeline.extractor_version,
+                chunk_index=chunk_index,
+                chunk_fingerprint=_chunk_fingerprint(chunk),
+                evidence_items=chunk_evidence,
+            )
+            evidence_items.extend(chunk_evidence)
+        return _normalize_evidence_items(parsed_document.source.source_id, evidence_items)
+
+    def _resume_checkpoints_for_document(
+        self,
+        *,
+        parsed_document: ParsedDocument,
+        chunks: list[ParsedDocument],
+        force: bool,
+    ) -> dict[int, list[EvidenceItem]]:
+        source_id = parsed_document.source.source_id
+        if force:
+            self.storage.clear_extraction_checkpoints(source_id)
+            return {}
+
+        rows = self.storage.list_extraction_checkpoints(source_id)
+        if not rows:
+            return {}
+
+        expected_fingerprints = {
+            chunk_index: _chunk_fingerprint(chunk) for chunk_index, chunk in enumerate(chunks)
+        }
+        resumed: dict[int, list[EvidenceItem]] = {}
+        for row in rows:
+            chunk_index = int(row["chunk_index"])
+            if (
+                row["source_sha256"] != parsed_document.source.sha256
+                or row["extractor_version"] != self.config.pipeline.extractor_version
+                or expected_fingerprints.get(chunk_index) != row["chunk_fingerprint"]
+            ):
+                self.storage.clear_extraction_checkpoints(source_id)
+                return {}
+            resumed[chunk_index] = [
+                EvidenceItem.model_validate(item)
+                for item in json.loads(str(row["evidence_json"]))
+            ]
+        return resumed
+
+    def _import_material(self, material: ImportMaterial) -> Path:
+        destination = self.project_root / "raw" / "imported" / material.relative_import_path
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(path, destination)
+        if material.archive_member:
+            with zipfile.ZipFile(material.source_path) as archive:
+                with archive.open(material.archive_member) as source_handle:
+                    with destination.open("wb") as destination_handle:
+                        shutil.copyfileobj(source_handle, destination_handle)
+        else:
+            target_path = material.source_path.resolve()
+            if destination.is_symlink():
+                if destination.resolve() == target_path:
+                    return destination
+                destination.unlink()
+            elif destination.exists():
+                destination.unlink()
+            destination.symlink_to(target_path)
         return destination
+
+    def _parsed_document_for_material(self, *, material: ImportMaterial, imported_path: Path) -> ParsedDocument:
+        parsed_document = parse_document(
+            imported_path,
+            project_relative_path=material.relative_import_path,
+            config=self.config,
+            source_family=material.source_family,
+            source_family_subproduct=material.source_family_subproduct,
+        )
+        return self._annotate_parsed_document(
+            parsed_document,
+            detection=FamilyDetection(
+                source_family=material.source_family,
+                reason=material.detection_reason,
+                subproduct=material.source_family_subproduct,
+            ),
+            archive_member=material.archive_member,
+        )
+
+    def _annotate_parsed_document(
+        self,
+        parsed_document: ParsedDocument,
+        *,
+        detection: FamilyDetection,
+        archive_member: str | None,
+    ) -> ParsedDocument:
+        metadata = dict(parsed_document.source.metadata)
+        metadata["source_family"] = detection.source_family.value
+        metadata["source_family_reason"] = detection.reason
+        if detection.subproduct:
+            metadata["source_family_subproduct"] = detection.subproduct
+        if archive_member:
+            metadata["archive_member"] = archive_member
+        return parsed_document.model_copy(
+            update={
+                "source": parsed_document.source.model_copy(
+                    update={"metadata": metadata}
+                )
+            }
+        )
 
     def _import_path_for(self, *, path: Path, root: Path) -> Path:
         return self.project_root / "raw" / "imported" / self._relative_import_path_for(path=path, root=root)
@@ -359,6 +797,23 @@ class Pipeline:
     def _relative_import_path_for(self, *, path: Path, root: Path) -> Path:
         root_name = slugify(root.name or "imported")
         return Path(root_name) / path.relative_to(root)
+
+    def _archive_relative_root(self, *, path: Path, root: Path) -> Path:
+        archive_relative = path.relative_to(root)
+        return Path(slugify(root.name or "imported")) / archive_relative.parent / archive_relative.stem
+
+    def _is_archive(self, path: Path) -> bool:
+        return path.suffix.lower() in ARCHIVE_SUFFIXES
+
+    def _unsafe_archive_member(self, member_path: Path) -> bool:
+        return member_path.is_absolute() or ".." in member_path.parts
+
+    def _ingestable_archive_member(self, *, archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bool:
+        member_path = Path(info.filename)
+        if ingestable_file(member_path):
+            return True
+        with archive.open(info) as handle:
+            return sniff_text_bytes(handle.read(4096))
 
     def _delete_source_artifacts(self, source_id: str, imported_path: Path) -> None:
         parsed_artifact = self.project_root / "parsed" / f"{source_id}.json"
@@ -377,12 +832,174 @@ class Pipeline:
             json.dumps([item.model_dump(mode="json") for item in evidence_items], indent=2) + "\n"
         )
 
+    def _write_ingest_manifest(self, *, root: Path, entries: list[IngestManifestEntry]) -> Path:
+        manifest_root = self.project_root / "state" / "manifests"
+        manifest_root.mkdir(parents=True, exist_ok=True)
+        manifest_id = f"ingest_{slugify(root.name or 'root')}_{short_hash(f'{root.resolve()}:{iso_now()}', length=10)}"
+        manifest = IngestManifest(
+            manifest_id=manifest_id,
+            root_uri=root.resolve().as_uri(),
+            generated_at=datetime.now(tz=UTC),
+            materials=sorted(entries, key=lambda entry: entry.relative_import_path),
+        )
+        manifest_path = manifest_root / f"{manifest_id}.json"
+        manifest_path.write_text(manifest.model_dump_json(indent=2) + "\n")
+        return manifest_path
+
     def _append_log(self, line: str) -> None:
         log_path = self.project_root / "tree" / "log.md"
         with log_path.open("a", encoding="utf-8") as handle:
             if log_path.stat().st_size == 0:
                 handle.write("# Ingest Log\n")
             handle.write(f"{line}\n")
+
+    def _summarize_materials(self, materials: list[ImportMaterial]) -> DiscoverySummary:
+        summary = DiscoverySummary(total_materials=len(materials))
+        for material in materials:
+            if material.archive_member:
+                summary.archive_members += 1
+            else:
+                summary.direct_files += 1
+            root_name = _material_root_name(material.relative_import_path)
+            summary.by_root[root_name] = summary.by_root.get(root_name, 0) + 1
+            family_name = material.source_family.value
+            summary.by_family[family_name] = summary.by_family.get(family_name, 0) + 1
+            if material.source_family_subproduct:
+                subproduct_key = f"{family_name}:{material.source_family_subproduct}"
+                summary.by_family_subproduct[subproduct_key] = (
+                    summary.by_family_subproduct.get(subproduct_key, 0) + 1
+                )
+        return summary
+
+    def _write_progress(
+        self,
+        *,
+        status: str,
+        root: Path,
+        result: BatchResult,
+        discovery: DiscoverySummary,
+        total_materials: int,
+        current_index: int | None = None,
+        current_material: ImportMaterial | None = None,
+    ) -> Path:
+        progress_path = self.project_root / "state" / "progress.json"
+        payload: dict[str, object] = {
+            "status": status,
+            "root_uri": root.resolve().as_uri(),
+            "updated_at": iso_now(),
+            "materials": {
+                "discovered": discovery.total_materials,
+                "direct_files": discovery.direct_files,
+                "archive_members": discovery.archive_members,
+                "by_root": discovery.by_root,
+                "by_family": discovery.by_family,
+                "by_family_subproduct": discovery.by_family_subproduct,
+            },
+            "counts": {
+                "imported": result.imported,
+                "processed": result.processed,
+                "skipped": result.skipped,
+                "failed": result.failed,
+                "deleted": result.deleted,
+            },
+            "progress": {
+                "completed": result.imported + result.failed,
+                "total": total_materials,
+                "current_index": current_index,
+            },
+        }
+        if current_material:
+            payload["current_material"] = {
+                "relative_import_path": current_material.relative_import_path.as_posix(),
+                "source_path": current_material.source_path.resolve().as_posix(),
+                "source_family": current_material.source_family.value,
+                "source_family_subproduct": current_material.source_family_subproduct,
+                "archive_member": current_material.archive_member,
+                "detection_reason": current_material.detection_reason,
+            }
+        progress_path.write_text(json.dumps(payload, indent=2) + "\n")
+        return progress_path
+
+
+def _chunk_document(document: ParsedDocument) -> list[ParsedDocument]:
+    if not document.spans:
+        return [document]
+
+    chunks: list[ParsedDocument] = []
+    current_spans: list[ParsedSpan] = []
+    current_characters = 0
+
+    for span in document.spans:
+        span_length = len(span.text)
+        would_overflow = (
+            current_spans
+            and (
+                len(current_spans) >= MAX_EXTRACTION_SPANS
+                or current_characters + span_length > MAX_EXTRACTION_CHARACTERS
+            )
+        )
+        if would_overflow:
+            chunks.append(ParsedDocument(source=document.source, text="", spans=current_spans))
+            current_spans = []
+            current_characters = 0
+
+        current_spans.append(span)
+        current_characters += span_length
+
+    if current_spans:
+        chunks.append(ParsedDocument(source=document.source, text="", spans=current_spans))
+
+    return chunks
+
+
+def _chunk_fingerprint(document: ParsedDocument) -> str:
+    payload = [
+        {
+            "span_id": span.span_id,
+            "span_start": span.span_start,
+            "span_end": span.span_end,
+            "text": span.text,
+        }
+        for span in document.spans
+    ]
+    return short_hash(json.dumps(payload, sort_keys=True), length=16)
+
+
+def _normalize_evidence_items(source_id: str, evidence_items: list[EvidenceItem]) -> list[EvidenceItem]:
+    normalized_by_id: dict[str, EvidenceItem] = {}
+    for item in evidence_items:
+        normalized = item.model_copy(
+            update={
+                "source_id": source_id,
+                "quote": " ".join(item.quote.split()),
+                "skill_candidates": sorted(set(item.skill_candidates)),
+                "artifact_candidates": sorted(set(item.artifact_candidates)),
+            }
+        )
+        evidence_id = _stable_evidence_id(normalized)
+        normalized = normalized.model_copy(update={"evidence_id": evidence_id})
+        existing = normalized_by_id.get(evidence_id)
+        if existing is None or normalized.confidence > existing.confidence:
+            normalized_by_id[evidence_id] = normalized
+
+    return sorted(
+        normalized_by_id.values(),
+        key=lambda item: (item.span_start, item.span_end, item.evidence_type.value, item.evidence_id),
+    )
+
+
+def _stable_evidence_id(item: EvidenceItem) -> str:
+    payload = {
+        "source_id": item.source_id,
+        "span_start": item.span_start,
+        "span_end": item.span_end,
+        "quote": item.quote,
+        "evidence_type": item.evidence_type.value,
+        "signal_class": item.signal_class.value,
+        "skill_candidates": item.skill_candidates,
+        "artifact_candidates": item.artifact_candidates,
+    }
+    return f"ev_{short_hash(json.dumps(payload, sort_keys=True), length=16)}"
 
 
 def _latest_evidence_at(evidence_items: list[EvidenceItem]) -> datetime | None:
@@ -596,6 +1213,19 @@ def _merge_earliest_datetime(left: datetime | None, right: datetime | None) -> d
     if left and right:
         return min(left, right)
     return left or right
+
+def _material_root_name(relative_import_path: Path) -> str:
+    parts = relative_import_path.parts
+    if len(parts) >= 2:
+        return parts[1]
+    if parts:
+        return parts[0]
+    return "root"
+
+def _format_counts(counts: dict[str, int]) -> str:
+    if not counts:
+        return "-"
+    return ",".join(f"{name}:{counts[name]}" for name in sorted(counts))
 
 
 def _time_reference_to_datetime(value: str) -> datetime:

@@ -1,0 +1,35 @@
+{
+  "name": "@microck/traccia",
+  "version": "0.1.0",
+  "description": "Thin npm launcher for the traccia Python CLI.",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "traccia": "npm/bin/traccia.js"
+  },
+  "files": [
+    "npm/bin/traccia.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "cli",
+    "knowledge-graph",
+    "llm",
+    "python",
+    "skill-graph"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Microck/traccia.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Microck/traccia/issues"
+  },
+  "homepage": "https://github.com/Microck/traccia#readme"
+}

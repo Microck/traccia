@@ -42,6 +42,16 @@ class SourceStatus(StrEnum):
     ERROR = "error"
 
 
+class SourceFamily(StrEnum):
+    GENERIC = "generic"
+    GOOGLE_TAKEOUT = "google_takeout"
+    DISCORD_DATA_PACKAGE = "discord_data_package"
+    TWITTER_ARCHIVE = "twitter_archive"
+    REDDIT_EXPORT = "reddit_export"
+    INSTAGRAM_EXPORT = "instagram_export"
+    FACEBOOK_EXPORT = "facebook_export"
+
+
 class SourceCategory(StrEnum):
     AUTHORED_CONTENT = "authored_content"
     CONSUMED_CONTENT = "consumed_content"
@@ -141,6 +151,13 @@ class ReviewRiskLevel(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+class IngestMaterialStatus(StrEnum):
+    DISCOVERED = "discovered"
+    PROCESSED = "processed"
+    SKIPPED = "skipped"
+    FAILED = "failed"
 
 
 class SourceDocument(TracciaModel):
@@ -259,3 +276,21 @@ class ParsedDocument(TracciaModel):
     source: SourceDocument
     text: str
     spans: list[ParsedSpan] = Field(default_factory=list)
+
+
+class IngestManifestEntry(TracciaModel):
+    relative_import_path: str
+    source_path: str
+    archive_member: str | None = None
+    source_family: SourceFamily
+    source_family_subproduct: str | None = None
+    detection_reason: str
+    status: IngestMaterialStatus
+    source_id: str | None = None
+
+
+class IngestManifest(TracciaModel):
+    manifest_id: str
+    root_uri: str
+    generated_at: datetime
+    materials: list[IngestManifestEntry] = Field(default_factory=list)

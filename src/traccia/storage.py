@@ -34,6 +34,22 @@ class Storage:
             connection.close()
 
     def _ensure_schema(self, connection: sqlite3.Connection) -> None:
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS extraction_checkpoints (
+                checkpoint_id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                source_sha256 TEXT NOT NULL,
+                extractor_version TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                chunk_fingerprint TEXT NOT NULL,
+                evidence_json TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(source_id, chunk_index)
+            );
+            """
+        )
         self._ensure_columns(
             connection,
             table="person_skill_states",
@@ -96,6 +112,7 @@ class Storage:
         with self.connect() as connection:
             connection.execute("delete from evidence_items where source_id = ?", (source_id,))
             connection.execute("delete from source_spans where source_id = ?", (source_id,))
+            connection.execute("delete from extraction_checkpoints where source_id = ?", (source_id,))
 
     def clear_pending_review_items(self) -> None:
         with self.connect() as connection:
@@ -144,7 +161,14 @@ class Storage:
     def replace_source_spans(self, source_id: str, spans: list[ParsedSpan]) -> None:
         with self.connect() as connection:
             connection.execute("delete from source_spans where source_id = ?", (source_id,))
-            for span in spans:
+            seen_span_ids: set[str] = set()
+            for index, span in enumerate(spans):
+                span_id = span.span_id
+                if span_id in seen_span_ids:
+                    span_id = f"{span.span_id}::{index}"
+                    while span_id in seen_span_ids:
+                        span_id = f"{span.span_id}::{index}:{len(seen_span_ids)}"
+                seen_span_ids.add(span_id)
                 connection.execute(
                     """
                     insert into source_spans (
@@ -152,12 +176,12 @@ class Storage:
                     ) values (?, ?, ?, ?, ?, ?)
                     """,
                     (
-                        span.span_id,
+                        span_id,
                         source_id,
                         span.span_start,
                         span.span_end,
                         span.segment_kind,
-                        span.span_id,
+                        span_id,
                     ),
                 )
 
@@ -186,6 +210,67 @@ class Storage:
                         json.dumps(payload, sort_keys=True),
                     ),
                 )
+
+    def upsert_extraction_checkpoint(
+        self,
+        *,
+        source_id: str,
+        source_sha256: str,
+        extractor_version: str,
+        chunk_index: int,
+        chunk_fingerprint: str,
+        evidence_items: list[EvidenceItem],
+    ) -> None:
+        checkpoint_id = f"{source_id}::{chunk_index}"
+        payload = json.dumps(
+            [item.model_dump(mode="json") for item in evidence_items],
+            sort_keys=True,
+        )
+        with self.connect() as connection:
+            connection.execute(
+                """
+                insert into extraction_checkpoints (
+                    checkpoint_id, source_id, source_sha256, extractor_version,
+                    chunk_index, chunk_fingerprint, evidence_json, updated_at
+                ) values (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                on conflict(source_id, chunk_index) do update set
+                    checkpoint_id = excluded.checkpoint_id,
+                    source_sha256 = excluded.source_sha256,
+                    extractor_version = excluded.extractor_version,
+                    chunk_fingerprint = excluded.chunk_fingerprint,
+                    evidence_json = excluded.evidence_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    checkpoint_id,
+                    source_id,
+                    source_sha256,
+                    extractor_version,
+                    chunk_index,
+                    chunk_fingerprint,
+                    payload,
+                ),
+            )
+
+    def list_extraction_checkpoints(self, source_id: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                select *
+                from extraction_checkpoints
+                where source_id = ?
+                order by chunk_index
+                """,
+                (source_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def clear_extraction_checkpoints(self, source_id: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "delete from extraction_checkpoints where source_id = ?",
+                (source_id,),
+            )
 
     def list_evidence(self) -> list[EvidenceItem]:
         with self.connect() as connection:
