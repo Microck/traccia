@@ -284,6 +284,19 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     details_json TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS extraction_checkpoints (
+    checkpoint_id TEXT PRIMARY KEY,
+    source_id TEXT NOT NULL,
+    source_sha256 TEXT NOT NULL,
+    extractor_version TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    chunk_fingerprint TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source_id, chunk_index)
+);
+
 CREATE TABLE IF NOT EXISTS manual_overrides (
     override_id TEXT PRIMARY KEY,
     target_type TEXT NOT NULL,

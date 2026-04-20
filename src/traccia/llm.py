@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +29,11 @@ from traccia.taxonomy import DOMAIN_BY_NAME
 
 class BackendError(RuntimeError):
     pass
+
+@dataclass(slots=True)
+class _HttpResponseError(Exception):
+    status: int
+    body: str
 
 
 class ExtractedEvidencePayload(BaseModel):
@@ -264,28 +271,20 @@ class OpenAICompatibleBackend:
         last_error: Exception | None = None
         for attempt_index in range(retries):
             try:
-                req = request.Request(
-                    url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers=self._headers(),
-                    method="POST",
-                )
-                with request.urlopen(req, timeout=self.config.backend.timeout_seconds) as response:
-                    return json.loads(response.read().decode("utf-8"))
-            except error.HTTPError as exc:
-                body = exc.read().decode("utf-8", errors="replace")
-                last_error = BackendError(f"LLM backend request failed ({exc.code}): {body}")
-                if exc.code not in {408, 409, 429, 500, 502, 503, 504} or attempt_index == retries - 1:
+                return self._request_json(method="POST", url=url, payload=payload)
+            except _HttpResponseError as exc:
+                last_error = BackendError(f"LLM backend request failed ({exc.status}): {exc.body}")
+                if exc.status not in {408, 409, 429, 500, 502, 503, 504} or attempt_index == retries - 1:
                     raise last_error from exc
                 time.sleep(
                     _retry_delay_seconds(
                         attempt_index=attempt_index,
-                        http_status=exc.code,
-                        error_body=body,
+                        http_status=exc.status,
+                        error_body=exc.body,
                     )
                 )
                 continue
-            except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            except (error.URLError, TimeoutError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
                 last_error = BackendError(f"LLM backend request failed: {exc}")
                 if attempt_index == retries - 1:
                     raise last_error from exc
@@ -294,14 +293,11 @@ class OpenAICompatibleBackend:
 
     def _get_json(self, path: str) -> dict[str, object]:
         url = f"{self.config.backend.base_url.rstrip('/')}{path}"
-        req = request.Request(url, headers=self._headers(), method="GET")
         try:
-            with request.urlopen(req, timeout=self.config.backend.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise BackendError(f"LLM backend healthcheck failed ({exc.code}): {body}") from exc
-        except (error.URLError, json.JSONDecodeError) as exc:
+            return self._request_json(method="GET", url=url)
+        except _HttpResponseError as exc:
+            raise BackendError(f"LLM backend healthcheck failed ({exc.status}): {exc.body}") from exc
+        except (error.URLError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
             raise BackendError(f"LLM backend healthcheck failed: {exc}") from exc
 
     def _headers(self) -> dict[str, str]:
@@ -309,6 +305,86 @@ class OpenAICompatibleBackend:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+
+    def _request_json(
+        self,
+        *,
+        method: str,
+        url: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        if shutil.which("curl"):
+            return self._request_json_via_curl(method=method, url=url, payload=payload)
+        return self._request_json_via_urllib(method=method, url=url, payload=payload)
+
+    def _request_json_via_curl(
+        self,
+        *,
+        method: str,
+        url: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        command = [
+            "curl",
+            "-sS",
+            "--max-time",
+            str(self.config.backend.timeout_seconds),
+            "-X",
+            method,
+            "-H",
+            f"Authorization: Bearer {self.api_key}",
+            "-H",
+            "Content-Type: application/json",
+            "-w",
+            "\n__HTTP_STATUS__:%{http_code}",
+            url,
+        ]
+        if payload is not None:
+            command.extend(["-d", json.dumps(payload)])
+
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=self.config.backend.timeout_seconds + 5,
+            check=False,
+        )
+        if completed.returncode == 28:
+            raise TimeoutError(
+                f"curl timed out after {self.config.backend.timeout_seconds}s for {url}"
+            )
+        if completed.returncode != 0:
+            stderr = completed.stderr.strip() or completed.stdout.strip()
+            raise subprocess.SubprocessError(stderr or f"curl exited with code {completed.returncode}")
+
+        body_text, marker, status_text = completed.stdout.rpartition("\n__HTTP_STATUS__:")
+        if not marker:
+            raise json.JSONDecodeError("missing HTTP status marker", completed.stdout, 0)
+        status_code = int(status_text.strip() or "0")
+        if status_code >= 400:
+            raise _HttpResponseError(status=status_code, body=body_text.strip())
+        return json.loads(body_text)
+
+    def _request_json_via_urllib(
+        self,
+        *,
+        method: str,
+        url: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        encoded_payload = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = request.Request(
+            url,
+            data=encoded_payload,
+            headers=self._headers(),
+            method=method,
+        )
+        try:
+            with request.urlopen(req, timeout=self.config.backend.timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise _HttpResponseError(status=exc.code, body=body) from exc
 
     def _extract_message_content(self, response_body: dict[str, object]) -> str | dict[str, object]:
         try:

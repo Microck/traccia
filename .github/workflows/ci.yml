@@ -21,6 +21,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Set up uv
         uses: astral-sh/setup-uv@v8
         with:
@@ -48,6 +53,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Set up uv
         uses: astral-sh/setup-uv@v8
         with:
@@ -66,6 +76,12 @@ jobs:
 
       - name: Smoke test installed CLI
         run: uv tool run --from . traccia --help
+
+      - name: Smoke test npm wrapper against local checkout
+        run: TRACCIA_USE_LOCAL_REPO=1 node npm/bin/traccia.js --help
+
+      - name: Validate npm package contents
+        run: npm pack --dry-run
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

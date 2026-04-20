@@ -169,10 +169,45 @@ def ingest_dir(
     result = _pipeline(project_root).ingest_directory(path.resolve())
     typer.echo(
         (
-            f"imported={result.imported} processed={result.processed} skipped={result.skipped} "
+            f"discovered={result.discovered} imported={result.imported} processed={result.processed} skipped={result.skipped} "
             f"failed={result.failed} deleted={result.deleted}"
         )
     )
+
+@app.command("discover-dir")
+def discover_dir(
+    path: Path,
+    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+    format: str = typer.Option("text", "--format", help="text or json"),
+) -> None:
+    summary = _pipeline(project_root).discover_directory(path.resolve())
+    payload = {
+        "root_uri": path.resolve().as_uri(),
+        "materials": summary.total_materials,
+        "direct_files": summary.direct_files,
+        "archive_members": summary.archive_members,
+        "by_root": summary.by_root,
+        "by_family": summary.by_family,
+        "by_family_subproduct": summary.by_family_subproduct,
+    }
+    if format == "json":
+        typer.echo(json.dumps(payload, indent=2))
+        return
+    typer.echo(
+        (
+            f"materials={summary.total_materials} direct_files={summary.direct_files} "
+            f"archive_members={summary.archive_members}"
+        )
+    )
+    typer.echo("by_root:")
+    for name, count in sorted(summary.by_root.items()):
+        typer.echo(f"- {name}: {count}")
+    typer.echo("by_family:")
+    for name, count in sorted(summary.by_family.items()):
+        typer.echo(f"- {name}: {count}")
+    typer.echo("by_family_subproduct:")
+    for name, count in sorted(summary.by_family_subproduct.items()):
+        typer.echo(f"- {name}: {count}")
 
 
 @app.command()

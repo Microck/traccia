@@ -23,15 +23,23 @@ most archive tools are good at storing material and bad at telling the skill sto
 
 ## install
 
-`traccia` already ships a real console script. `uv run traccia ...` works from the repo, but it is not the only way to use it.
+`traccia` already ships a real console script. the Python package is still the canonical implementation, but the repo now also includes a thin npm wrapper for people who want to install or run the CLI from a Node-first environment without rewriting the tool in JavaScript.
 
 | path | command | result |
 | --- | --- | --- |
 | repo-local workflow | `uv sync` | keeps `uv run traccia ...` available inside the project |
 | bare `traccia` command with live local edits | `uv tool install -e .` | installs the console script on your `PATH` in editable mode |
 | standard editable install without `uv tool` | `pip install -e .` | installs the same console script through pip |
+| npm one-off wrapper | `npx @microck/traccia doctor .` | downloads the wrapper, then shells out to `uvx --from traccia traccia ...` |
+| npm global wrapper | `npm install -g @microck/traccia` | installs a `traccia` command on your `PATH`, backed by `uvx` |
 
-if you just want the shortest path from a clone, use the editable tool install once and then call `traccia` directly.
+the unscoped npm package name `traccia` is already taken, so the wrapper is published as `@microck/traccia`. the installed command is still `traccia`.
+
+the wrapper does not embed Python. it still expects `uv` and `uvx` to exist on your machine, because its only job is to hand execution off to the real Python package cleanly.
+
+if you want the wrapper to pull the heavier document stack by default, set `TRACCIA_UVX_SPEC='traccia[document-markdown]'` before running it. if you are working inside this repo and want the wrapper to exercise the local checkout instead of PyPI, set `TRACCIA_USE_LOCAL_REPO=1`. that maintainer mode switches the wrapper from `uvx --from traccia traccia ...` to `uv run traccia ...` from the repo root.
+
+if you just want the shortest path from a clone, `uv tool install -e .` is still the cleanest direct install.
 
 document normalization providers are optional because some of them are heavy. the base install keeps the core CLI light, while the document stack can be added when you actually need high-quality local PDF and DOCX parsing:
 
@@ -163,7 +171,9 @@ the practical difference is simple. if your PDFs are born-digital and layout-hea
 
 ## what it does today
 
-the current build already handles immutable source intake into `raw/imported/`, file-by-file parsing with span tracking, source classification across authored material and activity traces, and evidence extraction that tries to separate real work from ambient interest. the graph layer creates canonical skill nodes, keeps a review queue for uncertain additions, and stores person-specific state such as level, confidence, freshness, historical peak, first seen, first learned, first strong evidence, estimated acquisition timing, acquisition basis, and core-self centrality.
+the current build already handles immutable source intake into `raw/imported/`, file-by-file parsing with span tracking, source classification across authored material and activity traces, and evidence extraction that tries to separate real work from ambient interest. known export families no longer go straight through the same raw path either. google takeout html, meta export html, twitter `window.YTD` javascript payloads, and reddit csv bundles now get normalized into cleaner record-oriented text before the model sees them, while unknown material still falls back to the generic file-by-file lane.
+
+the ingest side also writes manifests and live progress state with family and subproduct counts. that means a long-running scan can be inspected as “twitter archive direct-messages” or “instagram export messages” instead of just “generic text files”, and discovery works without requiring backend auth so you can classify an archive before spending any model quota.
 
 the rendering side produces markdown node pages, profile exports, `graph.json`, `tree.json`, an ascii tree, a local static viewer, and an obsidian vault export with actual note generation instead of a dead folder dump.
 
@@ -180,6 +190,8 @@ the rendering side produces markdown node pages, profile exports, `graph.json`, 
 | broader archive direction | social profiles, issue trackers, twitter or x exports, more takeout-style dumps | explicitly in scope for future expansion, but not all implemented yet |
 
 the intended archive boundary is wider than the current parser list. the system is meant to grow toward bigger archive imports without treating every interaction as equal proof of competence.
+
+in practice the ingest model is hybrid. major export families get explicit adapters where the raw provider format is especially bad for downstream extraction, and everything else still gets ingested one file at a time through the generic parser path. that keeps the pipeline open-ended without pretending every export structure deserves identical handling.
 
 ## output surface
 
@@ -212,6 +224,7 @@ the full command list lives behind `traccia --help`, but the current working sur
 | --- | --- |
 | `traccia init` | scaffold a new project |
 | `traccia doctor` | verify the scaffold and backend config |
+| `traccia discover-dir` | classify a directory before ingest and show family/subproduct counts |
 | `traccia ingest` / `traccia ingest-dir` | import files into the graph pipeline |
 | `traccia rebuild` | recompute the graph from stored material |
 | `traccia tree` | print the current tree |

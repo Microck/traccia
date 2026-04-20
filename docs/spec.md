@@ -172,11 +172,15 @@ Large export bundles should not be treated as anonymous files. The discovery lay
 - `discord_data_package`
 - `twitter_archive`
 - `reddit_export`
+- `instagram_export`
+- `facebook_export`
 
 Rules:
 - source-family detection happens before evidence extraction
 - archive containers such as zip files are expanded into individually tracked materials
 - the detected source family and the detection reason are stored in source metadata and per-run ingest manifests
+- family-specific subproducts should be tracked in discovery summaries and progress state so large ingests can be monitored by export slice, not just by top-level family
+- known export families should be allowed to normalize raw provider formats such as HTML dumps, JS-wrapped JSON, or CSV bundles into cleaner per-record text before LLM extraction
 - generic parsing remains available as a fallback when no export-family marker matches
 
 ### 6.7 Document normalization

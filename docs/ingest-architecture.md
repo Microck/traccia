@@ -26,6 +26,8 @@ Current families:
 | `discord_data_package` | Discord personal data packages | `account/user.json`, `messages/index.json`, `servers/index.json` |
 | `twitter_archive` | X/Twitter account archives | `data/account.js`, `data/tweets.js`, `Your archive.html` |
 | `reddit_export` | Reddit account export layouts | `comments.csv`, `posts.csv`, `conversations.json` |
+| `instagram_export` | Instagram export bundles and Meta account downloads scoped to Instagram | `Instagram/`, `profile_information/`, `followers_and_following/` |
+| `facebook_export` | Facebook export bundles and Meta account downloads scoped to Facebook | `Facebook/`, `your_facebook_activity/`, `profile_information/` |
 
 Family detection is heuristic and intentionally explicit. Unknown layouts fall back to `generic` instead of silently being forced into a wrong adapter.
 
@@ -58,9 +60,11 @@ This is the run contract for large exports. If parsing or scoring changes later,
 - what family it was treated as
 - whether it was processed or skipped
 
+Discovery summaries and `state/progress.json` also keep a `by_family_subproduct` breakdown so a long-running scan can be checked at a more useful granularity than just top-level families.
+
 ## adapter direction
 
-The next structural step after manifests is source-family adapters.
+Source-family adapters are now part of the ingest path for known messy export shapes.
 
 Intended flow:
 
@@ -71,7 +75,18 @@ Intended flow:
 5. `chunk normalized records`
 6. `run LLM extraction on normalized chunks`
 
+Currently wired adapters:
+
+| family | adapter |
+|---|---|
+| `google_takeout` | export HTML cleanup plus contextual text wrapping for loose text files |
+| `instagram_export` / `facebook_export` | HTML export cleanup that drops CSS boilerplate and keeps the visible conversation or activity text |
+| `twitter_archive` | `window.YTD...` JavaScript payload normalization into record-oriented text |
+| `reddit_export` | CSV row normalization into record-oriented text with timestamps and subreddit context |
+
 That is the line between “can ingest big exports” and “can ingest big exports reliably”.
+
+Known export families are first-class lanes. Everything else still flows through the generic file-by-file path instead of being rejected.
 
 ## document normalization
 

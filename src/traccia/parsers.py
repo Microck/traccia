@@ -10,12 +10,14 @@ from typing import Any
 
 from traccia.config import TracciaConfig
 from traccia.document_normalizer import DOCUMENT_SOURCE_TYPES, normalize_document
+from traccia.family_normalizer import normalize_family_content
 from traccia.models import (
     ParsedDocument,
     ParsedSpan,
     Sensitivity,
     SourceCategory,
     SourceDocument,
+    SourceFamily,
     SourceStatus,
     SourceType,
 )
@@ -171,6 +173,8 @@ def parse_document(
     *,
     project_relative_path: Path,
     config: TracciaConfig | None = None,
+    source_family: SourceFamily | None = None,
+    source_family_subproduct: str | None = None,
 ) -> ParsedDocument:
     source_id = source_id_for_relative_path(project_relative_path)
     parsed_source = _parse_source_content(
@@ -178,6 +182,8 @@ def parse_document(
         project_relative_path=project_relative_path,
         source_id=source_id,
         config=config,
+        source_family=source_family,
+        source_family_subproduct=source_family_subproduct,
     )
     source = SourceDocument(
         source_id=source_id,
@@ -212,30 +218,53 @@ def _parse_source_content(
     project_relative_path: Path,
     source_id: str,
     config: TracciaConfig | None = None,
+    source_family: SourceFamily | None = None,
+    source_family_subproduct: str | None = None,
 ) -> ParsedSourceContent:
     source_type = detect_source_type(path)
+    family_normalized = normalize_family_content(
+        path=path,
+        project_relative_path=project_relative_path,
+        source_type=source_type,
+        source_family=source_family,
+        source_family_subproduct=source_family_subproduct,
+    )
+    if family_normalized:
+        text = family_normalized.text
+        parser = family_normalized.parser
+        metadata = family_normalized.metadata
+        title = family_normalized.title
+        created_at = family_normalized.created_at
     if source_type == SourceType.JSON:
-        payload = json.loads(_read_text_with_fallback(path))
-        structured = _parse_structured_json_source(
-            payload=payload,
-            path=path,
-            project_relative_path=project_relative_path,
-            source_id=source_id,
-        )
-        if structured:
-            return structured
-        text = json.dumps(payload, indent=2, sort_keys=True)
-        parser = _parser_name(source_type)
-        metadata: dict[str, Any] = {}
+        if not family_normalized:
+            payload = json.loads(_read_text_with_fallback(path))
+            structured = _parse_structured_json_source(
+                payload=payload,
+                path=path,
+                project_relative_path=project_relative_path,
+                source_id=source_id,
+            )
+            if structured:
+                return structured
+            text = json.dumps(payload, indent=2, sort_keys=True)
+            parser = _parser_name(source_type)
+            metadata = {}
+            title = None
+            created_at = None
     elif source_type in DOCUMENT_SOURCE_TYPES:
-        normalized = normalize_document(path, source_type=source_type, config=config)
-        text = normalized.text
-        parser = normalized.parser
-        metadata = normalized.metadata
-    else:
+        if not family_normalized:
+            normalized = normalize_document(path, source_type=source_type, config=config)
+            text = normalized.text
+            parser = normalized.parser
+            metadata = normalized.metadata
+            title = None
+            created_at = None
+    elif not family_normalized:
         text = _read_text(path, source_type)
         parser = _parser_name(source_type)
         metadata = {}
+        title = None
+        created_at = None
 
     source_category = _classify_source_category(
         path=path,
@@ -249,8 +278,8 @@ def _parse_source_content(
         source_type=source_type,
         source_category=source_category,
         parser=parser,
-        title=None,
-        created_at=None,
+        title=title,
+        created_at=created_at,
         metadata=metadata,
     )
 

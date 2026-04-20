@@ -9,7 +9,7 @@ from docx import Document as DocxDocument
 
 import traccia.document_normalizer as document_normalizer
 from traccia.config import TracciaConfig
-from traccia.models import SourceCategory, SourceType
+from traccia.models import SourceCategory, SourceFamily, SourceType
 from traccia.parsers import ingestable_file, parse_document
 
 
@@ -54,6 +54,91 @@ def test_parse_ai_conversation_export_builds_chat_spans_with_stable_line_numbers
         "User: First prompt\n\n"
         "Assistant: Second answer\nwith continuation"
     )
+
+
+def test_parse_instagram_export_html_uses_family_normalizer(tmp_path: Path) -> None:
+    export_path = tmp_path / "message_1.html"
+    export_path.write_text(
+        """
+        <html>
+          <head><style>body { color: red; }</style></head>
+          <body>
+            <div class="thread">
+              <h1>h</h1>
+              <div>no way you know them?</div>
+              <a href="https://www.instagram.com/stories/example">story link</a>
+              <div>may. 13, 2024 9:16 pm</div>
+            </div>
+          </body>
+        </html>
+        """
+    )
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path(
+            "Instagram/export/your_instagram_activity/messages/inbox/h_123/message_1.html"
+        ),
+        source_family=SourceFamily.INSTAGRAM_EXPORT,
+        source_family_subproduct="messages",
+    )
+
+    assert parsed.source.parser == "instagram_export-html"
+    assert parsed.source.metadata["family_normalizer"] == "html-export"
+    assert parsed.source.metadata["family_normalizer_record_count"] >= 1
+    assert "body { color: red; }" not in parsed.text
+    assert "no way you know them?" in parsed.text
+    assert "https://www.instagram.com/stories/example" in parsed.text
+
+
+def test_parse_twitter_archive_js_uses_family_normalizer(tmp_path: Path) -> None:
+    export_path = tmp_path / "account.js"
+    export_path.write_text(
+        """
+        window.YTD.account.part0 = [
+          {
+            "account": {
+              "username": "JustMicrock",
+              "email": "gkievfx@gmail.com",
+              "createdAt": "2019-12-02T14:21:19.009Z"
+            }
+          }
+        ];
+        """
+    )
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path("Twitter/archive/data/account.js"),
+        source_family=SourceFamily.TWITTER_ARCHIVE,
+        source_family_subproduct="account",
+    )
+
+    assert parsed.source.parser == "twitter-ytd-json"
+    assert parsed.source.metadata["family_normalizer"] == "twitter-ytd-js"
+    assert parsed.source.metadata["family_normalizer_kind"] == "account"
+    assert "username: JustMicrock" in parsed.text
+    assert "email: gkievfx@gmail.com" in parsed.text
+
+
+def test_parse_reddit_export_csv_uses_family_normalizer(tmp_path: Path) -> None:
+    export_path = tmp_path / "comments.csv"
+    export_path.write_text(
+        "subreddit,body,created_utc\nLocalLLaMA,benchmarked OCR tools,1715577360\n"
+    )
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path("Reddit/reddit-export/comments.csv"),
+        source_family=SourceFamily.REDDIT_EXPORT,
+        source_family_subproduct="comments",
+    )
+
+    assert parsed.source.parser == "reddit-csv"
+    assert parsed.source.metadata["family_normalizer"] == "reddit-csv"
+    assert parsed.source.metadata["family_normalizer_record_count"] == 1
+    assert "subreddit: LocalLLaMA" in parsed.text
+    assert "benchmarked OCR tools" in parsed.text
 
 
 def test_ingestable_file_skips_known_binary_media_extensions(tmp_path: Path) -> None:

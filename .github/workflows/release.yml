@@ -65,6 +65,29 @@ jobs:
           files: dist/*
           generate_release_notes: true
 
+  publish-npm:
+    if: vars.NPM_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Verify npm package
+        run: npm pack --dry-run
+
+      - name: Publish to npm
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   publish-pypi:
     if: vars.PYPI_PUBLISH == 'true'
     runs-on: ubuntu-latest

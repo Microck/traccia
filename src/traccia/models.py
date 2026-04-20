@@ -48,6 +48,8 @@ class SourceFamily(StrEnum):
     DISCORD_DATA_PACKAGE = "discord_data_package"
     TWITTER_ARCHIVE = "twitter_archive"
     REDDIT_EXPORT = "reddit_export"
+    INSTAGRAM_EXPORT = "instagram_export"
+    FACEBOOK_EXPORT = "facebook_export"
 
 
 class SourceCategory(StrEnum):
@@ -281,6 +283,7 @@ class IngestManifestEntry(TracciaModel):
     source_path: str
     archive_member: str | None = None
     source_family: SourceFamily
+    source_family_subproduct: str | None = None
     detection_reason: str
     status: IngestMaterialStatus
     source_id: str | None = None

@@ -13,6 +13,9 @@ build/
 dist/
 *.egg-info/
 .DS_Store
+node_modules/
+npm-debug.log*
+*.tgz
 
 # dora code context index
 .dora/
