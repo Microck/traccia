@@ -7,6 +7,7 @@ from traccia.models import EvidenceItem, PersonSkillState, SkillNode, SourceDocu
 
 
 class FixtureManifest(TracciaModel):
+    """Maps fixture file paths inside a golden-fixture directory."""
     config_path: str
     source_document_path: str
     evidence_item_path: str
@@ -16,6 +17,7 @@ class FixtureManifest(TracciaModel):
 
 
 class GoldenFixtureBundle(TracciaModel):
+    """Fully-resolved test fixture containing config, models, and sample text."""
     config: TracciaConfig
     source_document: SourceDocument
     evidence_item: EvidenceItem
@@ -25,6 +27,7 @@ class GoldenFixtureBundle(TracciaModel):
 
 
 def load_golden_fixture_bundle(root: Path) -> GoldenFixtureBundle:
+    """Load a golden fixture bundle from *root* using its manifest.json."""
     manifest_path = root / "manifest.json"
     manifest = FixtureManifest.model_validate_json(manifest_path.read_text())
 

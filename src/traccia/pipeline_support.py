@@ -20,6 +20,7 @@ COMMUNITY_ACTION_TYPES = {"taught", "presented", "reviewed"}
 
 
 def support_score(evidence_item: EvidenceItem) -> float:
+    """Compute a weighted support score for a single evidence item."""
     weight = {
         "implemented": 0.9,
         "debugged": 0.85,
@@ -43,6 +44,7 @@ def support_score(evidence_item: EvidenceItem) -> float:
 
 
 def evidence_counts_as_strong_action(evidence_item: EvidenceItem) -> bool:
+    """Return True if the evidence represents a strong action (not passive consumption)."""
     if evidence_item.evidence_type.value in PASSIVE_EVIDENCE_TYPES:
         return False
     if evidence_item.signal_class.value in STRONG_SIGNAL_CLASSES:
@@ -54,6 +56,7 @@ def evidence_counts_as_strong_action(evidence_item: EvidenceItem) -> bool:
 
 
 def evidence_bucket_flags(evidence_items: list[EvidenceItem]) -> dict[str, bool]:
+    """Compute boolean flags describing the quality of an evidence collection."""
     return {
         "consumption_only": all(not evidence_counts_as_strong_action(item) for item in evidence_items),
         "weak_signal_only": all(
@@ -64,6 +67,7 @@ def evidence_bucket_flags(evidence_items: list[EvidenceItem]) -> dict[str, bool]
 
 
 def should_create_node(candidate_name: str, support_bucket: dict[str, object]) -> bool:
+    """Decide whether a skill candidate has enough support to warrant node creation."""
     if support_bucket.get("weak_signal_only"):
         return False
     if candidate_name in SKILL_BY_NAME and support_bucket["score"] >= 0.5 and not support_bucket["consumption_only"]:
@@ -76,6 +80,7 @@ def should_create_node(candidate_name: str, support_bucket: dict[str, object]) -
 
 
 def should_request_review(support_bucket: dict[str, object]) -> bool:
+    """Decide whether a skill candidate should be flagged for human review."""
     evidence_items: list[EvidenceItem] = list(support_bucket["evidence"])
     if any(item.evidence_type.value == "self_claimed" for item in evidence_items):
         return True
@@ -85,6 +90,7 @@ def should_request_review(support_bucket: dict[str, object]) -> bool:
 
 
 def build_skill_node(name: str) -> SkillNode:
+    """Create a new SkillNode from a taxonomy name."""
     definition = SKILL_BY_NAME.get(name)
     domain_name = definition.domain if definition else "Programming"
     aliases = list(definition.aliases) if definition else []
@@ -110,6 +116,7 @@ def build_skill_state(
     locked: bool,
     hidden: bool,
 ) -> PersonSkillState:
+    """Build a PersonSkillState from a skill node and its supporting evidence."""
     action_score = sum(
         support_score(item)
         for item in evidence_items
@@ -154,6 +161,7 @@ def build_skill_state(
 
 
 def latest_evidence_at(evidence_items: list[EvidenceItem]) -> datetime | None:
+    """Return the most recent time_reference from a list of evidence items."""
     values = [item.time_reference for item in evidence_items if item.time_reference]
     if not values:
         return None

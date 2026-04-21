@@ -113,6 +113,7 @@ FACEBOOK_SUBPRODUCT_MARKERS = (
 
 @dataclass(slots=True)
 class FamilyRule:
+    """A rule for detecting an export family by its file-path markers."""
     source_family: SourceFamily
     display_name: str
     markers: tuple[str, ...]
@@ -161,21 +162,25 @@ FAMILY_RULES = (
 
 @dataclass(slots=True)
 class FamilyDetection:
+    """Result of detecting which export family a source belongs to."""
     source_family: SourceFamily
     reason: str
     subproduct: str | None = None
 
 
 def detect_source_family_from_path(path: Path) -> FamilyDetection:
+    """Detect the export family from a filesystem path."""
     return detect_source_family_from_names([path.as_posix()])
 
 
 def detect_source_family_from_archive(path: Path) -> FamilyDetection:
+    """Detect the export family by inspecting archive member filenames."""
     with ZipFile(path) as archive:
         return detect_source_family_from_names(info.filename for info in archive.infolist())
 
 
 def detect_source_family_from_names(names: list[str] | tuple[str, ...] | object) -> FamilyDetection:
+    """Detect the export family from a collection of file/path names."""
     lowered_names = [str(name).lower() for name in names]
 
     for rule in FAMILY_RULES:
@@ -196,6 +201,7 @@ def detect_source_family_from_names(names: list[str] | tuple[str, ...] | object)
 
 
 def refine_archive_member_detection(*, archive_detection: FamilyDetection, member_path: Path) -> FamilyDetection:
+    """Refine detection for an individual archive member using the parent detection context."""
     member_detection = detect_source_family_from_path(member_path)
     if archive_detection.source_family == SourceFamily.GENERIC:
         return member_detection
@@ -217,6 +223,7 @@ def refine_archive_member_detection(*, archive_detection: FamilyDetection, membe
 
 
 def _match_markers(names: list[str], markers: tuple[str, ...]) -> str | None:
+    """Return the first marker that matches any name, or None."""
     for marker in markers:
         for name in names:
             if _marker_matches_name(name=name, marker=marker):
@@ -225,6 +232,7 @@ def _match_markers(names: list[str], markers: tuple[str, ...]) -> str | None:
 
 
 def _match_subproduct(names: list[str], markers: tuple[tuple[str, str], ...]) -> str | None:
+    """Return the subproduct label for the first matching marker."""
     for marker, subproduct in markers:
         for name in names:
             if _marker_matches_name(name=name, marker=marker):
@@ -233,6 +241,7 @@ def _match_subproduct(names: list[str], markers: tuple[tuple[str, str], ...]) ->
 
 
 def _match_subproduct_for_family(*, source_family: SourceFamily, names: list[str]) -> str | None:
+    """Look up subproduct markers for a specific source family."""
     for rule in FAMILY_RULES:
         if rule.source_family != source_family:
             continue
@@ -241,6 +250,7 @@ def _match_subproduct_for_family(*, source_family: SourceFamily, names: list[str
 
 
 def _marker_matches_name(*, name: str, marker: str) -> bool:
+    """Check whether a marker string matches a file name, handling directory markers."""
     normalized_name = name.strip("/")
     normalized_marker = marker.strip("/")
     if marker.endswith("/"):

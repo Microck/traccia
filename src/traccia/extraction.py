@@ -42,11 +42,13 @@ EVIDENCE_BASE_CONFIDENCE = {
 
 @dataclass(slots=True)
 class ExtractionResult:
+    """Holds extracted evidence items and unresolved weak-signal candidates."""
     evidence_items: list[EvidenceItem]
     unresolved_candidates: dict[str, list[str]]
 
 
 def extract_evidence(document: ParsedDocument) -> ExtractionResult:
+    """Extract structured evidence items from a parsed document's spans."""
     evidence_items: list[EvidenceItem] = []
     unresolved_candidates: dict[str, list[str]] = defaultdict(list)
 
@@ -87,6 +89,7 @@ def extract_evidence(document: ParsedDocument) -> ExtractionResult:
 
 
 def _time_reference_for(document: ParsedDocument) -> str | None:
+    """Derive an ISO-8601 time reference from a parsed document's source metadata."""
     timestamp = document.source.created_at or document.source.ingested_at
     if not timestamp:
         return None
@@ -94,6 +97,7 @@ def _time_reference_for(document: ParsedDocument) -> str | None:
 
 
 def _classify_evidence_type(*, document: ParsedDocument, text: str) -> EvidenceType:
+    """Classify the evidence type based on source context and keyword patterns."""
     lowered = text.lower()
     if (
         document.source.source_category == SourceCategory.SOCIAL_OR_COMMUNITY_TRACE
@@ -111,6 +115,7 @@ def _classify_evidence_type(*, document: ParsedDocument, text: str) -> EvidenceT
 
 
 def _confidence_for(*, document: ParsedDocument, evidence_type: EvidenceType) -> float:
+    """Compute a confidence score adjusted by source type and category."""
     source_bonus = 0.07 if document.source.source_type == SourceType.CODE else 0.0
     signal_penalty = {
         SourceCategory.PRODUCED_ARTIFACT: 0.0,
@@ -127,6 +132,7 @@ def _confidence_for(*, document: ParsedDocument, evidence_type: EvidenceType) ->
 
 
 def _reliability_for(*, document: ParsedDocument, evidence_type: EvidenceType) -> ReliabilityTier:
+    """Assign a reliability tier based on source type and evidence type."""
     if document.source.source_type == SourceType.CODE:
         return ReliabilityTier.TIER_A
     if document.source.source_category in {SourceCategory.PLATFORM_EXPORT_ACTIVITY, SourceCategory.METADATA_ONLY_ACTIVITY}:
@@ -143,6 +149,7 @@ def _reliability_for(*, document: ParsedDocument, evidence_type: EvidenceType) -
 
 
 def _artifact_candidates(source_type: SourceType) -> list[str]:
+    """Return artifact type labels for a given source type."""
     return {
         SourceType.CODE: ["source code"],
         SourceType.MARKDOWN: ["markdown document"],
@@ -155,6 +162,7 @@ def _artifact_candidates(source_type: SourceType) -> list[str]:
 
 
 def _infer_from_source_type(source_type: SourceType) -> list[str]:
+    """Infer default skill names when no explicit skill match is found."""
     return {
         SourceType.CODE: ["Python"],
         SourceType.CSV: ["Documentation"],
@@ -162,6 +170,7 @@ def _infer_from_source_type(source_type: SourceType) -> list[str]:
 
 
 def _signal_class_for(*, document: ParsedDocument, evidence_type: EvidenceType, text: str) -> SignalClass:
+    """Determine the signal class based on source category and evidence type."""
     del text
     source_category = document.source.source_category
     filename = document.source.metadata.get("filename", "").lower()
