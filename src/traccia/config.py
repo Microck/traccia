@@ -9,6 +9,7 @@ from traccia.models import Sensitivity, TracciaModel
 
 
 class TracciaPaths(TracciaModel):
+    """Directory layout for the Traccia project tree."""
     raw_inbox: str = "raw/inbox"
     raw_imported: str = "raw/imported"
     parsed: str = "parsed"
@@ -22,6 +23,7 @@ class TracciaPaths(TracciaModel):
 
 
 class PipelineVersions(TracciaModel):
+    """Version tags for each pipeline stage."""
     parser_version: str = "phase-0"
     extractor_version: str = "phase-0"
     canonicalizer_version: str = "phase-0"
@@ -30,24 +32,28 @@ class PipelineVersions(TracciaModel):
 
 
 class ThresholdConfig(TracciaModel):
+    """Numeric thresholds controlling auto-creation and review gating."""
     strong_evidence_auto_create: float = Field(default=0.85, ge=0.0, le=1.0)
     review_confidence_floor: float = Field(default=0.6, ge=0.0, le=1.0)
     consumption_max_level: int = Field(default=2, ge=0, le=5)
 
 
 class PrivacyConfig(TracciaModel):
+    """Privacy and sensitivity defaults for data handling."""
     default_sensitivity: Sensitivity = Sensitivity.PRIVATE
     redact_source_paths_in_exports: bool = True
     allow_raw_excerpt_export: bool = False
 
 
 class RenderingConfig(TracciaModel):
+    """Output format and export toggles."""
     default_tree_format: str = "ascii"
     enable_obsidian_export: bool = True
     enable_viewer_bundle: bool = True
 
 
 class BackendConfig(TracciaModel):
+    """LLM backend connection settings."""
     provider: str = "openai_compatible"
     model: str = "gpt-5-chat-latest"
     api_key_env: str = "OPENAI_API_KEY"
@@ -59,11 +65,13 @@ class BackendConfig(TracciaModel):
 
 
 class DocumentNormalizationConfig(TracciaModel):
+    """Provider settings for document normalization / OCR."""
     provider: str = "auto"
     ocr_provider: str = "auto"
 
 
 class TracciaConfig(TracciaModel):
+    """Root configuration model aggregating all sub-configs."""
     schema_version: int = 1
     project_name: str = "traccia"
     paths: TracciaPaths = Field(default_factory=TracciaPaths)
@@ -78,19 +86,23 @@ class TracciaConfig(TracciaModel):
 
 
 def default_config(project_name: str = "traccia") -> TracciaConfig:
+    """Return a default TracciaConfig with an optional project name."""
     return TracciaConfig(project_name=project_name)
 
 
 def dump_config_text(config: TracciaConfig) -> str:
+    """Serialize *config* to a YAML string."""
     data = config.model_dump(mode="json")
     return yaml.safe_dump(data, sort_keys=False)
 
 
 def write_config(path: Path, config: TracciaConfig) -> None:
+    """Write *config* as YAML to *path*, creating parent directories."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(dump_config_text(config))
 
 
 def load_config(path: Path) -> TracciaConfig:
+    """Parse a YAML file at *path* and return a validated TracciaConfig."""
     raw_config = yaml.safe_load(path.read_text()) or {}
     return TracciaConfig.model_validate(raw_config)

@@ -6,12 +6,14 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True, slots=True)
 class DomainDefinition:
+    """A named skill domain with a description."""
     name: str
     description: str
 
 
 @dataclass(frozen=True, slots=True)
 class SkillDefinition:
+    """A skill entry with domain, aliases, and regex match patterns."""
     name: str
     domain: str
     description: str
@@ -111,10 +113,12 @@ SKILL_BY_NAME = {skill.name: skill for skill in SKILLS}
 
 @dataclass(slots=True)
 class MatchResult:
+    """Holds the set of skill names matched from a text scan."""
     names: set[str] = field(default_factory=set)
 
 
 def match_skill_names(text: str) -> list[str]:
+    """Return skill names whose patterns match *text*."""
     lowered = text.lower()
     matched: list[str] = []
     for skill in SKILLS:
