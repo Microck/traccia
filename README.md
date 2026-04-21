@@ -6,8 +6,26 @@
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.12%2B-000000?style=flat-square" alt="python badge">
   <img src="https://img.shields.io/badge/license-MIT-000000?style=flat-square" alt="mit license badge">
+  <img src="https://img.shields.io/github/actions/workflow/status/Microck/traccia/release.yml?style=flat-square" alt="CI badge">
 </p>
 
+---
+
+## Table of Contents
+
+- [Why traccia](#why)
+- [Install](#install)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Document Normalization](#document-normalization)
+- [Input Surface](#input-surface)
+- [Output Surface](#output-surface)
+- [Command Reference](#command-reference)
+- [Repository Map](#repo-map)
+- [Verification](#verification)
+- [Automation](#automation)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
@@ -49,16 +67,31 @@ document normalization providers are optional because some of them are heavy. th
 | marker only | `uv sync --extra marker` | stronger local PDF-to-markdown conversion, especially for layout-heavy PDFs |
 | full local document stack | `uv sync --extra document-markdown` | marker + docling + markitdown fallback chain |
 
-## first run
+## Quick Start
 
 ```bash
+# 1. Install traccia
 uv tool install -e .
+
+# 2. Initialize a new project
 traccia init my-traccia
+
+# 3. Ingest your archive
 traccia ingest-dir /path/to/archive --project-root my-traccia
+
+# 4. View the skill tree
 traccia tree --project-root my-traccia
+
+# 5. Inspect a specific skill
 traccia explain python --project-root my-traccia
+
+# 6. Review uncertain skill changes
 traccia review --project-root my-traccia
+
+# 7. Export to Obsidian
 traccia export obsidian --project-root my-traccia
+
+# 8. Open the local viewer
 traccia viewer --project-root my-traccia
 ```
 
@@ -83,7 +116,9 @@ backend:
 
 any provider that clones the same request and response shape can be used by swapping `base_url`, `model`, and `api_key_env`. the current implementation deliberately targets `chat_completions` because it remains the most commonly copied interface across hosted and self-hosted providers, even if some vendors now prefer newer APIs for their own stacks.
 
-## backend surface
+## Configuration
+
+### Backend Configuration
 
 | key | example | meaning |
 | --- | --- | --- |
@@ -94,7 +129,7 @@ any provider that clones the same request and response shape can be used by swap
 | `api_style` | `chat_completions` | the only live API style supported right now |
 | `structured_output_mode` | `json_schema` | primary structured-output mode; `json_object` is also supported |
 
-## document normalization
+### Document Normalization Configuration
 
 `traccia` now treats document normalization and OCR as separate concerns. that split is deliberate. converting a file into clean markdown is one problem. deciding how to recover text from scanned pages or embedded images is another.
 
@@ -216,23 +251,72 @@ each skill node is meant to answer the questions that normal profile tools dodge
 
 that separation matters once you ingest noisy exports. searches, follows, bios, bookmarks, lightweight chats, and stray mentions can support interest, context, or identity. on their own they should not inflate mastery. the system is designed to preserve those lighter signals without letting them pretend to be authored work or repeat implementation evidence.
 
-## command surface
+## Command Reference
 
 the full command list lives behind `traccia --help`, but the current working surface is already broad enough to use day to day:
+
+### Core Commands
 
 | command | use |
 | --- | --- |
 | `traccia init` | scaffold a new project |
 | `traccia doctor` | verify the scaffold and backend config |
+| `traccia lint` | validate the repo config against the schema |
+| `traccia stats` | show statistics (sources, skills, evidence, review items) |
+
+### Ingest Commands
+
+| command | use |
+| --- | --- |
+| `traccia add` | import a single file directly into raw/imported/ |
+| `traccia add-dir` | import all files from a directory directly |
 | `traccia discover-dir` | classify a directory before ingest and show family/subproduct counts |
-| `traccia ingest` / `traccia ingest-dir` | import files into the graph pipeline |
-| `traccia rebuild` | recompute the graph from stored material |
-| `traccia tree` | print the current tree |
+| `traccia ingest` | ingest a single file and recompute the graph |
+| `traccia ingest-dir` | import files from a directory into the graph pipeline |
+| `traccia reingest` | reprocess a specific source by ID |
+| `traccia watch` | monitor a directory for changes and ingest automatically |
+| `traccia rebuild` | recompute the graph from all stored material |
+
+### Tree and Skill Commands
+
+| command | use |
+| --- | --- |
+| `traccia tree` | print the current skill tree (ascii or mermaid format) |
+| `traccia node` | display a specific skill node by ID |
 | `traccia explain` / `traccia why` | inspect one skill node |
 | `traccia evidence` | list evidence connected to a skill |
-| `traccia review` | process uncertain graph changes |
-| `traccia alias` | manage canonical aliases |
-| `traccia export ...` | write graph, profile, markdown, and obsidian projections |
+
+### Review and Override Commands
+
+| command | use |
+| --- | --- |
+| `traccia review` | process pending review items (use `--accept` or `--reject` to act) |
+| `traccia lock` | prevent a skill from being modified automatically |
+| `traccia hide` | hide a skill from the output tree |
+
+### Export Commands
+
+| command | use |
+| --- | --- |
+| `traccia render` | regenerate all markdown artifacts from the graph |
+| `traccia export graph` | write graph.json export |
+| `traccia export profile` | write profile/skill.md summary |
+| `traccia export skill-md` | write skill node markdown files |
+| `traccia export obsidian` | export to obsidian-friendly note graph |
+| `traccia viewer` | print the local static viewer URL |
+
+### Alias Management
+
+| command | use |
+| --- | --- |
+| `traccia alias add` | add a canonical alias for a skill |
+
+### Export Options
+
+| command | use |
+| --- | --- |
+| `traccia tree --format mermaid` | output tree in mermaid format |
+| `traccia discover-dir --format json` | output discovery in JSON format |
 
 ## repo map
 
@@ -260,6 +344,34 @@ the live external backend path still depends on real credentials and a reachable
 ## automation
 
 github actions now handle the basic release path for the repo. pushes and pull requests run lint, tests, package builds, and a CLI smoke check. version tags matching `v*` build release artifacts and attach them to a github release. pypi publishing is wired for trusted publishing as an opt-in path, and only runs when the repository variable `PYPI_PUBLISH=true` is set and the repository has been registered as a trusted publisher on pypi.
+
+## Contributing
+
+see [CLAUDE.md](CLAUDE.md) for maintainer guidelines and development workflow. the CLAUDE.md contains:
+
+- core worldview and architecture layers
+- evidence handling rules
+- skill inference and leveling rules
+- rendering guidelines
+- review queue workflow
+- style guidelines
+
+for local development:
+
+```bash
+# Run tests
+uv run pytest -q
+
+# Run linter
+uv run ruff check src tests
+
+# Build package
+uv build
+
+# Full verification
+uv run ruff check src tests && uv run pytest -q && uv build
+```
+
 ## license
 
 mit
