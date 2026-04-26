@@ -100,11 +100,6 @@ TEXT_READ_ENCODINGS = (
 )
 
 
-@dataclass(slots=True)
-class SourceMaterial:
-    path: Path
-    relative_import_path: Path
-
 
 @dataclass(slots=True)
 class ParsedSourceContent:
