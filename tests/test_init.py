@@ -6,6 +6,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 import traccia.llm as llm_module
@@ -14,6 +15,13 @@ from traccia.config import TracciaConfig, load_config
 from traccia.llm import OpenAICompatibleBackend, ScoringRequest
 from traccia.models import EvidenceItem
 from traccia.pipeline_support import build_skill_node
+
+
+def _local_ingest_loop_script() -> Path:
+    runner_script = Path(__file__).resolve().parents[1] / "scripts" / "traccia-ingest-loop.sh"
+    if not runner_script.exists():
+        pytest.skip("local-only ingest loop runner script is not tracked in the public repo")
+    return runner_script
 
 
 def test_init_creates_phase_zero_layout(tmp_path: Path) -> None:
@@ -283,7 +291,7 @@ def test_openai_compatible_backend_repairs_invalid_json_escapes(monkeypatch) -> 
 
 
 def test_traccia_ingest_loop_honors_long_backend_cooldown_window(tmp_path: Path) -> None:
-    runner_script = Path(__file__).resolve().parents[1] / "scripts" / "traccia-ingest-loop.sh"
+    runner_script = _local_ingest_loop_script()
     project_root = tmp_path / "project"
     input_root = tmp_path / "input"
     fake_bin = tmp_path / "bin"
@@ -347,7 +355,7 @@ def test_traccia_ingest_loop_honors_long_backend_cooldown_window(tmp_path: Path)
 
 
 def test_traccia_ingest_loop_honors_wrapped_reset_seconds_from_log_output(tmp_path: Path) -> None:
-    runner_script = Path(__file__).resolve().parents[1] / "scripts" / "traccia-ingest-loop.sh"
+    runner_script = _local_ingest_loop_script()
     project_root = tmp_path / "project"
     input_root = tmp_path / "input"
     fake_bin = tmp_path / "bin"
@@ -414,7 +422,7 @@ def test_traccia_ingest_loop_honors_wrapped_reset_seconds_from_log_output(tmp_pa
 
 
 def test_traccia_ingest_loop_honors_gemini_human_quota_reset_duration(tmp_path: Path) -> None:
-    runner_script = Path(__file__).resolve().parents[1] / "scripts" / "traccia-ingest-loop.sh"
+    runner_script = _local_ingest_loop_script()
     project_root = tmp_path / "project"
     input_root = tmp_path / "input"
     fake_bin = tmp_path / "bin"
