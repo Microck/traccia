@@ -20,6 +20,38 @@ def test_detect_source_family_from_path_matches_google_takeout() -> None:
     assert detection.subproduct == "my-activity"
 
 
+def test_detect_source_family_from_path_matches_google_takeout_spanish_youtube_folder() -> None:
+    detection = detect_source_family_from_path(
+        Path("Takeout/YouTube y YouTube Music/comentarios/comentarios.csv")
+    )
+
+    assert detection.source_family == SourceFamily.GOOGLE_TAKEOUT
+    assert detection.subproduct == "youtube-and-youtube-music"
+
+
+def test_detect_source_family_from_path_matches_google_takeout_mail_folder() -> None:
+    detection = detect_source_family_from_path(
+        Path("Takeout/Correo/Todo el correo, incluido Spam y Papelera.mbox")
+    )
+
+    assert detection.source_family == SourceFamily.GOOGLE_TAKEOUT
+    assert detection.subproduct == "mail"
+
+
+def test_detect_source_family_from_path_matches_google_takeout_drive_folder() -> None:
+    detection = detect_source_family_from_path(Path("takeout/Drive/Google AI Studio/notes"))
+
+    assert detection.source_family == SourceFamily.GOOGLE_TAKEOUT
+    assert detection.subproduct == "drive"
+
+
+def test_detect_source_family_from_path_matches_google_takeout_spanish_my_activity_folder() -> None:
+    detection = detect_source_family_from_path(Path("takeout/Mi actividad/YouTube/MyActivity.html"))
+
+    assert detection.source_family == SourceFamily.GOOGLE_TAKEOUT
+    assert detection.subproduct == "my-activity"
+
+
 def test_detect_source_family_from_path_matches_provider_root_folder() -> None:
     detection = detect_source_family_from_path(Path("Google/localizacion.txt"))
 

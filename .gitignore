@@ -17,5 +17,21 @@ node_modules/
 npm-debug.log*
 *.tgz
 
+# Local Traccia runs can contain private raw imports, parsed evidence,
+# database state, and live API/proxy configuration from E2E testing.
+tmp/
+
+# Local credentials and machine-specific runtime state.
+.env
+.env.*
+!.env.example
+.agent-runtime.json
+
+# Local E2E runner/watchdog wrappers generated during live backend testing.
+scripts/traccia-ingest-loop.sh
+scripts/traccia-progress-monitor.sh
+scripts/traccia-watchdog-loop.sh
+scripts/traccia-watchdog.py
+
 # dora code context index
 .dora/

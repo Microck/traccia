@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 
 import typer
@@ -10,7 +12,13 @@ from traccia.bootstrap import DIRECTORIES, FILES, JSON_FILES, RepoInitializer
 from traccia.config import load_config
 from traccia.llm import BackendError, backend_from_config, backend_summary
 from traccia.pipeline import Pipeline
-from traccia.rendering import ascii_tree, export_obsidian, mermaid_tree, render_project
+from traccia.rendering import (
+    ascii_tree,
+    export_debug_report,
+    export_obsidian,
+    mermaid_tree,
+    render_project,
+)
 from traccia.storage import Storage
 
 app = typer.Typer(help="Local-first reflective skill graph compiler.")
@@ -34,6 +42,44 @@ def _pipeline(project_root: Path) -> Pipeline:
 
 def _skill_markdown_path(project_root: Path, skill_id: str) -> Path:
     return project_root / "tree" / "nodes" / f"{skill_id}.md"
+
+
+def _package_available(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def _command_available(command: str) -> bool:
+    return shutil.which(command) is not None
+
+
+def _optional_capability_lines(config) -> list[str]:
+    lines: list[str] = []
+    lines.append(
+        "document normalization: "
+        f"docling={'yes' if _package_available('docling') else 'no'} "
+        f"markitdown={'yes' if _package_available('markitdown') else 'no'} "
+        f"marker_single={'yes' if _command_available('marker_single') else 'no'}"
+    )
+    lines.append(
+        "image OCR "
+        f"(multimodal.enable_local_image_ocr={str(config.multimodal.enable_local_image_ocr).lower()}): "
+        f"tesseract={'yes' if _command_available('tesseract') else 'no'}"
+    )
+    lines.append(
+        "media transcription "
+        f"(multimodal.enable_local_media_transcription={str(config.multimodal.enable_local_media_transcription).lower()}, "
+        f"provider={config.multimodal.audio_transcription_provider}): "
+        f"ffmpeg={'yes' if _command_available('ffmpeg') else 'no'} "
+        f"ffprobe={'yes' if _command_available('ffprobe') else 'no'} "
+        f"whisper={'yes' if _command_available('whisper') else 'no'}"
+    )
+    lines.append(
+        "remote media enrichment "
+        f"(multimodal.enable_remote_media_enrichment={str(config.multimodal.enable_remote_media_enrichment).lower()}, "
+        f"command={config.multimodal.remote_media_enrichment_command}): "
+        f"summarize={'yes' if _command_available(config.multimodal.remote_media_enrichment_command) else 'no'}"
+    )
+    return lines
 
 
 @app.command()
@@ -91,6 +137,8 @@ def doctor(
 
     config = load_config(_project_config_path(project_root))
     typer.echo(f"backend: {backend_summary(config)}")
+    for line in _optional_capability_lines(config):
+        typer.echo(line)
 
     backend_key = os.getenv(config.backend.api_key_env)
     if config.backend.provider == "fake":
@@ -419,6 +467,14 @@ def export_obsidian_command(
 ) -> None:
     render_project(project_root.resolve(), storage=_storage(project_root))
     typer.echo(export_obsidian(project_root.resolve()))
+
+
+@export_app.command("debug-report")
+def export_debug_report_command(
+    project_root: Path = typer.Option(Path("."), "--project-root", help="Initialized traccia repository."),
+) -> None:
+    render_project(project_root.resolve(), storage=_storage(project_root))
+    typer.echo(export_debug_report(project_root.resolve()))
 
 
 @app.command()

@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 from collections import defaultdict
+from datetime import UTC, datetime
 from pathlib import Path
 
 from traccia.config import load_config
@@ -16,9 +17,17 @@ def render_project(project_root: Path, *, storage: Storage) -> None:
     config = load_config(project_root / "config" / "config.yaml")
     skill_rows = storage.list_skill_rows()
     evidence_items = storage.list_evidence()
+    sources = {str(row["source_id"]): row for row in storage.list_sources()}
     edges = storage.list_edges()
     evidence_by_skill = _evidence_by_skill(skill_rows=skill_rows, evidence_items=evidence_items)
-    graph_payload = _build_graph_payload(skill_rows, edges)
+    graph_payload = _build_graph_payload(
+        skill_rows=skill_rows,
+        edges=edges,
+        evidence_by_skill=evidence_by_skill,
+        sources=sources,
+        allow_raw_excerpt_export=config.privacy.allow_raw_excerpt_export,
+        redact_source_paths=config.privacy.redact_source_paths_in_exports,
+    )
     tree_payload = _build_tree_payload(skill_rows)
 
     (project_root / "graph" / "graph.json").write_text(json.dumps(graph_payload, indent=2) + "\n")
@@ -40,6 +49,12 @@ def render_project(project_root: Path, *, storage: Storage) -> None:
         redact_source_paths=config.privacy.redact_source_paths_in_exports,
     )
     _write_viewer(project_root=project_root, graph_payload=graph_payload, tree_payload=tree_payload)
+    _write_debug_report(
+        project_root=project_root,
+        storage=storage,
+        skill_rows=skill_rows,
+        evidence_items=evidence_items,
+    )
 
 
 def export_obsidian(project_root: Path) -> Path:
@@ -103,13 +118,33 @@ def mermaid_tree(project_root: Path) -> str:
             lines.append(f"  {root_id} --> {child_id}[{child['name']} L{child['level']}]")
     return "\n".join(lines)
 
+def export_debug_report(project_root: Path) -> Path:
+    storage = Storage(project_root)
+    skill_rows = storage.list_skill_rows()
+    evidence_items = storage.list_evidence()
+    return _write_debug_report(
+        project_root=project_root,
+        storage=storage,
+        skill_rows=skill_rows,
+        evidence_items=evidence_items,
+    )
 
-def _build_graph_payload(skill_rows: list[dict[str, object]], edges) -> dict[str, object]:
+
+def _build_graph_payload(
+    *,
+    skill_rows: list[dict[str, object]],
+    edges,
+    evidence_by_skill: dict[str, list[EvidenceItem]],
+    sources: dict[str, dict[str, object]],
+    allow_raw_excerpt_export: bool,
+    redact_source_paths: bool,
+) -> dict[str, object]:
     nodes: list[dict[str, object]] = []
     for row in skill_rows:
+        skill_id = str(row["skill_id"])
         nodes.append(
             {
-                "id": row["skill_id"],
+                "id": skill_id,
                 "name": row["name"],
                 "kind": row["kind"],
                 "description": row["description"],
@@ -128,6 +163,12 @@ def _build_graph_payload(skill_rows: list[dict[str, object]], edges) -> dict[str
                 "acquiredAt": row["acquired_at"],
                 "acquisitionBasis": row["acquisition_basis"],
                 "status": row["state_status"] or row["status"],
+                "provenance": _graph_node_provenance(
+                    evidence_items=evidence_by_skill.get(skill_id, []),
+                    sources=sources,
+                    allow_raw_excerpt_export=allow_raw_excerpt_export,
+                    redact_source_paths=redact_source_paths,
+                ),
             }
         )
     return {
@@ -135,6 +176,78 @@ def _build_graph_payload(skill_rows: list[dict[str, object]], edges) -> dict[str
         "edges": [edge.model_dump(mode="json") for edge in edges],
         "metadata": {"generated_by": "traccia-renderer-v1"},
     }
+
+
+def _graph_node_provenance(
+    *,
+    evidence_items: list[EvidenceItem],
+    sources: dict[str, dict[str, object]],
+    allow_raw_excerpt_export: bool,
+    redact_source_paths: bool,
+) -> list[dict[str, object]]:
+    provenance: list[dict[str, object]] = []
+    for evidence in sorted(evidence_items, key=lambda item: item.evidence_id):
+        source_row = sources.get(str(evidence.source_id))
+        provenance.append(
+            {
+                "evidenceId": evidence.evidence_id,
+                "sourceId": evidence.source_id,
+                "source": _graph_source_provenance(
+                    source_row=source_row,
+                    redact_source_paths=redact_source_paths,
+                ),
+                "spanStart": evidence.span_start,
+                "spanEnd": evidence.span_end,
+                "evidenceType": evidence.evidence_type.value,
+                "signalClass": evidence.signal_class.value,
+                "reliability": evidence.reliability.value,
+                "confidence": evidence.confidence,
+                "timeReference": evidence.time_reference,
+                "excerpt": _render_evidence_text(
+                    evidence,
+                    allow_raw_excerpt_export=allow_raw_excerpt_export,
+                    redact_source_paths=redact_source_paths,
+                ),
+            }
+        )
+    return provenance
+
+
+def _graph_source_provenance(
+    *,
+    source_row: dict[str, object] | None,
+    redact_source_paths: bool,
+) -> dict[str, object]:
+    if source_row is None:
+        return {}
+
+    metadata = _source_metadata(source_row)
+    payload: dict[str, object] = {
+        "title": source_row.get("title"),
+        "filename": metadata.get("filename"),
+        "sourceType": source_row.get("source_type"),
+        "sourceCategory": source_row.get("source_category"),
+        "parser": source_row.get("parser"),
+        "sourceFamily": metadata.get("source_family"),
+        "sourceFamilySubproduct": metadata.get("source_family_subproduct"),
+    }
+    if not redact_source_paths:
+        payload["uri"] = source_row.get("uri")
+        payload["relativeImportPath"] = metadata.get("relative_import_path")
+    return {key: value for key, value in payload.items() if value not in (None, "")}
+
+
+def _source_metadata(source_row: dict[str, object]) -> dict[str, object]:
+    metadata_json = source_row.get("metadata_json")
+    if not isinstance(metadata_json, str) or not metadata_json:
+        return {}
+    try:
+        payload = json.loads(metadata_json)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
 
 
 def _build_tree_payload(skill_rows: list[dict[str, object]]) -> dict[str, object]:
@@ -552,6 +665,256 @@ def _write_viewer(*, project_root: Path, graph_payload: dict[str, object], tree_
 </html>
 """,
     )
+
+def _write_debug_report(
+    *,
+    project_root: Path,
+    storage: Storage,
+    skill_rows: list[dict[str, object]],
+    evidence_items: list[EvidenceItem],
+) -> Path:
+    export_root = project_root / "exports" / "debug"
+    export_root.mkdir(parents=True, exist_ok=True)
+
+    sources = storage.list_sources()
+    review_items = storage.list_review_items(include_closed=True)
+    manual_overrides = storage.list_manual_overrides()
+    source_evidence_counts = _count_by(
+        [str(item.source_id) for item in evidence_items]
+    )
+    attachment_summary = _collect_attachment_summary(project_root=project_root)
+    latest_progress = _read_json_if_exists(project_root / "state" / "progress.json")
+    latest_manifest = _latest_json_file(project_root / "state" / "manifests")
+    latest_run_state = _latest_json_file(project_root / "state" / "ingest-runs")
+
+    source_metadata = [
+        json.loads(str(row.get("metadata_json") or "{}"))
+        for row in sources
+    ]
+    source_family_counts = _count_by(
+        str(metadata.get("source_family") or "unknown") for metadata in source_metadata
+    )
+    source_family_subproduct_counts = _count_by(
+        str(metadata.get("source_family_subproduct") or "none") for metadata in source_metadata
+    )
+
+    report_payload = {
+        "generated_at": datetime.now(tz=UTC).isoformat(),
+        "project_root": str(project_root),
+        "counts": {
+            "sources": len(sources),
+            "evidence_items": len(evidence_items),
+            "skills": len([row for row in skill_rows if row["kind"] != "domain"]),
+            "domains": len([row for row in skill_rows if row["kind"] == "domain"]),
+            "pending_review_items": len([row for row in review_items if row["status"] == "pending"]),
+            "manual_overrides": len(manual_overrides),
+            "parsed_artifacts": len(list((project_root / "parsed").glob("*.json"))),
+            "evidence_artifacts": len(list((project_root / "evidence").glob("*.json"))),
+        },
+        "sources": {
+            "by_type": _count_by(str(row.get("source_type") or "unknown") for row in sources),
+            "by_category": _count_by(str(row.get("source_category") or "unknown") for row in sources),
+            "by_parser": _count_by(str(row.get("parser") or "unknown") for row in sources),
+            "by_status": _count_by(str(row.get("status") or "unknown") for row in sources),
+            "by_family": source_family_counts,
+            "by_family_subproduct": source_family_subproduct_counts,
+            "with_attachment_count": attachment_summary["sources_with_attachments"],
+            "with_attachment_text_count": attachment_summary["sources_with_attachment_text"],
+            "attachment_kinds": attachment_summary["by_kind"],
+            "top_sources_by_evidence": sorted(
+                (
+                    {
+                        "source_id": source_id,
+                        "evidence_count": count,
+                    }
+                    for source_id, count in source_evidence_counts.items()
+                ),
+                key=lambda item: (-int(item["evidence_count"]), str(item["source_id"])),
+            )[:20],
+            "sources_without_evidence": sorted(
+                [
+                    str(row["source_id"])
+                    for row in sources
+                    if source_evidence_counts.get(str(row["source_id"]), 0) == 0
+                ]
+            )[:50],
+        },
+        "evidence": {
+            "by_type": _count_by(item.evidence_type.value for item in evidence_items),
+            "by_signal_class": _count_by(item.signal_class.value for item in evidence_items),
+            "by_reliability": _count_by(item.reliability.value for item in evidence_items),
+            "top_skill_candidates": _count_top_strings(
+                [candidate for item in evidence_items for candidate in item.skill_candidates]
+            ),
+        },
+        "skills": {
+            "by_level": _count_by(
+                str(int(row["level"] or 0))
+                for row in skill_rows
+                if row["kind"] != "domain"
+            ),
+            "by_freshness": _count_by(
+                str(row.get("freshness") or "unknown")
+                for row in skill_rows
+                if row["kind"] != "domain"
+            ),
+            "by_status": _count_by(
+                str(row.get("state_status") or row.get("status") or "unknown")
+                for row in skill_rows
+                if row["kind"] != "domain"
+            ),
+            "top_skills": [
+                {
+                    "skill_id": str(row["skill_id"]),
+                    "name": str(row["name"]),
+                    "level": int(row["level"] or 0),
+                    "confidence": float(row["state_confidence"] or 0.0),
+                    "freshness": str(row.get("freshness") or "unknown"),
+                    "core_self_centrality": float(row["core_self_centrality"] or 0.0),
+                }
+                for row in sorted(
+                    [row for row in skill_rows if row["kind"] != "domain"],
+                    key=lambda row: (
+                        -int(row["level"] or 0),
+                        -float(row["state_confidence"] or 0.0),
+                        str(row["name"]),
+                    ),
+                )[:20]
+            ],
+        },
+        "ingest": {
+            "latest_progress": latest_progress,
+            "latest_manifest": latest_manifest,
+            "latest_run_state": latest_run_state,
+        },
+    }
+
+    report_json_path = export_root / "report.json"
+    report_md_path = export_root / "report.md"
+    report_json_path.write_text(json.dumps(report_payload, indent=2) + "\n")
+    report_md_path.write_text(_debug_report_markdown(report_payload).rstrip() + "\n")
+    return report_json_path
+
+def _collect_attachment_summary(*, project_root: Path) -> dict[str, object]:
+    sources_with_attachments = 0
+    sources_with_attachment_text = 0
+    by_kind: dict[str, int] = defaultdict(int)
+
+    for parsed_path in (project_root / "parsed").glob("*.json"):
+        payload = _read_json_if_exists(parsed_path)
+        if not isinstance(payload, dict):
+            continue
+        attachments = payload.get("attachments") or []
+        if not isinstance(attachments, list) or not attachments:
+            continue
+        sources_with_attachments += 1
+        if any(isinstance(item, dict) and item.get("extracted_text") for item in attachments):
+            sources_with_attachment_text += 1
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
+                continue
+            by_kind[str(attachment.get("kind") or "unknown")] += 1
+
+    return {
+        "sources_with_attachments": sources_with_attachments,
+        "sources_with_attachment_text": sources_with_attachment_text,
+        "by_kind": dict(sorted(by_kind.items())),
+    }
+
+def _latest_json_file(directory: Path) -> dict[str, object] | None:
+    if not directory.exists():
+        return None
+    candidates = sorted(directory.glob("*.json"), key=lambda path: path.stat().st_mtime_ns)
+    if not candidates:
+        return None
+    payload = _read_json_if_exists(candidates[-1])
+    if isinstance(payload, dict):
+        payload["_path"] = str(candidates[-1])
+    return payload if isinstance(payload, dict) else None
+
+def _read_json_if_exists(path: Path) -> dict[str, object] | list[object] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except json.JSONDecodeError:
+        return None
+
+def _count_by(values) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for value in values:
+        counts[str(value)] += 1
+    return dict(sorted(counts.items()))
+
+def _count_top_strings(values: list[str], *, limit: int = 20) -> list[dict[str, object]]:
+    counts = _count_by(values)
+    return [
+        {"value": value, "count": count}
+        for value, count in sorted(counts.items(), key=lambda item: (-int(item[1]), str(item[0])))[:limit]
+    ]
+
+def _debug_report_markdown(report_payload: dict[str, object]) -> str:
+    counts = report_payload["counts"]
+    sources = report_payload["sources"]
+    evidence = report_payload["evidence"]
+    skills = report_payload["skills"]
+    ingest = report_payload["ingest"]
+    latest_progress = ingest.get("latest_progress") or {}
+    latest_run_state = ingest.get("latest_run_state") or {}
+    latest_manifest = ingest.get("latest_manifest") or {}
+
+    lines = [
+        "# Debug Report",
+        "",
+        f"generated_at: {report_payload['generated_at']}",
+        "",
+        "## Counts",
+        f"- sources: {counts['sources']}",
+        f"- evidence_items: {counts['evidence_items']}",
+        f"- skills: {counts['skills']}",
+        f"- domains: {counts['domains']}",
+        f"- pending_review_items: {counts['pending_review_items']}",
+        f"- manual_overrides: {counts['manual_overrides']}",
+        "",
+        "## Source Breakdown",
+        f"- by_family: {json.dumps(sources['by_family'], sort_keys=True)}",
+        f"- by_type: {json.dumps(sources['by_type'], sort_keys=True)}",
+        f"- by_parser: {json.dumps(sources['by_parser'], sort_keys=True)}",
+        f"- attachment_kinds: {json.dumps(sources['attachment_kinds'], sort_keys=True)}",
+        f"- sources_with_attachments: {sources['with_attachment_count']}",
+        f"- sources_with_attachment_text: {sources['with_attachment_text_count']}",
+        "",
+        "## Evidence Breakdown",
+        f"- by_type: {json.dumps(evidence['by_type'], sort_keys=True)}",
+        f"- by_signal_class: {json.dumps(evidence['by_signal_class'], sort_keys=True)}",
+        f"- by_reliability: {json.dumps(evidence['by_reliability'], sort_keys=True)}",
+        "",
+        "## Skill Breakdown",
+        f"- by_level: {json.dumps(skills['by_level'], sort_keys=True)}",
+        f"- by_freshness: {json.dumps(skills['by_freshness'], sort_keys=True)}",
+        "",
+        "## Latest Ingest",
+        f"- progress_status: {latest_progress.get('status', 'unknown')}",
+        f"- progress_completed: {((latest_progress.get('progress') or {}).get('completed'))}",
+        f"- progress_total: {((latest_progress.get('progress') or {}).get('total'))}",
+        f"- latest_run_state_path: {latest_run_state.get('_path', 'n/a')}",
+        f"- latest_manifest_path: {latest_manifest.get('_path', 'n/a')}",
+        "",
+        "## Top Skills",
+    ]
+    for row in skills["top_skills"][:10]:
+        lines.append(
+            f"- {row['name']} (L{row['level']}, confidence {row['confidence']:.2f}, freshness {row['freshness']}, centrality {row['core_self_centrality']:.2f})"
+        )
+    lines.extend(
+        [
+            "",
+            "## Top Skill Candidates In Evidence",
+        ]
+    )
+    for row in evidence["top_skill_candidates"][:10]:
+        lines.append(f"- {row['value']}: {row['count']}")
+    return "\n".join(lines)
 
 
 def _render_evidence_text(

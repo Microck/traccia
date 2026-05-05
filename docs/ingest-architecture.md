@@ -15,6 +15,45 @@ For every ingest run:
 - record that decision in a manifest under `state/manifests/`
 - only then parse, extract evidence, and update the graph
 
+## source of truth
+
+The rendered graph is not the source of truth during ingest.
+
+The durable source of truth is `state/catalog.sqlite`, especially:
+- `sources` for imported source metadata
+- `source_spans` for parsed source offsets
+- `evidence_items` for model-extracted evidence tied to one source
+- `extraction_checkpoints` for resumable chunk extraction inside one source
+- graph tables for the latest rendered projection over stored evidence
+
+This means extraction and graph scoring are intentionally separate phases:
+
+1. A material is parsed into spans.
+2. Large materials are split into chunks.
+3. Each chunk is sent to the extractor with only that source context.
+4. The extractor emits evidence records, not skill levels.
+5. Evidence records are stored with source ID, span offsets, quotes, candidate skills, evidence type, confidence, and time references.
+6. Graph recompute loads all stored evidence, groups it by candidate skill, canonicalizes against the existing catalog, and scores the affected skill state from the merged evidence history.
+
+The system must not compress a batch of materials into one summary and then infer skills from that summary. Batch boundaries are allowed for scheduling graph refreshes, but not for replacing per-source evidence.
+
+## live graph refresh cadence
+
+Directory ingest checkpoints raw progress after every material, so a crash, quota limit, or mount failure does not require starting from zero.
+
+Live graph refreshes are a separate operator-facing projection. On large runs, they are batched by `graph_refresh.live_checkpoint_material_interval` and `graph_refresh.live_checkpoint_min_interval_seconds`. The default is:
+
+```yaml
+graph_refresh:
+  live_checkpoint_material_interval: 25
+  live_checkpoint_min_interval_seconds: 1800.0
+  small_run_live_checkpoint_material_limit: 10
+```
+
+For small runs, the graph can refresh immediately because the overhead is low and fast visual feedback is useful. For large archive runs, batching avoids repeatedly rescoring a nearly identical graph after every single source while preserving per-material evidence and resumability.
+
+Changing graph refresh cadence must not change final output semantics. The final graph sync still recomputes from all stored evidence.
+
 ## source families
 
 Current families:
@@ -38,12 +77,12 @@ Each ingest run writes one manifest file:
 ```json
 {
   "manifest_id": "ingest_rrss_data_ab12cd34ef",
-  "root_uri": "file:///data/rrss-data",
+  "root_uri": "file:///data/personal-archive",
   "generated_at": "2026-04-19T12:00:00+00:00",
   "materials": [
     {
-      "relative_import_path": "rrss-data/reddit-export/comments.csv",
-      "source_path": "/mnt/gdrive2/rrss-data/reddit-export.zip",
+      "relative_import_path": "personal-archive/reddit-export/comments.csv",
+      "source_path": "/mnt/archive/personal-archive/reddit-export.zip",
       "archive_member": "comments.csv",
       "source_family": "reddit_export",
       "detection_reason": "matched Reddit export marker: comments.csv",

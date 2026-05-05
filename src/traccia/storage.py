@@ -48,6 +48,16 @@ class Storage:
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(source_id, chunk_index)
             );
+
+            CREATE TABLE IF NOT EXISTS graph_candidate_cache (
+                candidate_name TEXT NOT NULL,
+                support_fingerprint TEXT NOT NULL,
+                canonical_decision_json TEXT NOT NULL,
+                score_payload_json TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(candidate_name, support_fingerprint)
+            );
             """
         )
         self._ensure_columns(
@@ -270,6 +280,54 @@ class Storage:
             connection.execute(
                 "delete from extraction_checkpoints where source_id = ?",
                 (source_id,),
+            )
+
+    def fetch_graph_candidate_cache(
+        self,
+        *,
+        candidate_name: str,
+        support_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                select *
+                from graph_candidate_cache
+                where candidate_name = ? and support_fingerprint = ?
+                """,
+                (candidate_name, support_fingerprint),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def upsert_graph_candidate_cache(
+        self,
+        *,
+        candidate_name: str,
+        support_fingerprint: str,
+        canonical_decision_json: str,
+        score_payload_json: str | None,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                insert into graph_candidate_cache (
+                    candidate_name,
+                    support_fingerprint,
+                    canonical_decision_json,
+                    score_payload_json,
+                    updated_at
+                ) values (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                on conflict(candidate_name, support_fingerprint) do update set
+                    canonical_decision_json = excluded.canonical_decision_json,
+                    score_payload_json = excluded.score_payload_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    candidate_name,
+                    support_fingerprint,
+                    canonical_decision_json,
+                    score_payload_json,
+                ),
             )
 
     def list_evidence(self) -> list[EvidenceItem]:

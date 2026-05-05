@@ -59,6 +59,7 @@ traccia tree --project-root my-traccia
 traccia explain python --project-root my-traccia
 traccia review --project-root my-traccia
 traccia export obsidian --project-root my-traccia
+traccia export debug-report --project-root my-traccia
 traccia viewer --project-root my-traccia
 ```
 
@@ -93,6 +94,60 @@ any provider that clones the same request and response shape can be used by swap
 | `base_url` | `https://api.openai.com/v1` | root URL for the compatible endpoint |
 | `api_style` | `chat_completions` | the only live API style supported right now |
 | `structured_output_mode` | `json_schema` | primary structured-output mode; `json_object` is also supported |
+| `supports_vision` | `false` | whether this backend should be trusted to accept multimodal image parts on the OpenAI-style endpoint |
+| `vision_detail` | `auto` | image detail hint passed to multimodal-capable backends when raw images are sent |
+
+## linked media and vision
+
+`traccia` now treats linked media as part of the same source context instead of as a detached second source. if a tweet, post, message, or export record references local media, the parent source can carry that attachment context into evidence extraction.
+
+there are two separate layers here:
+
+| layer | default | what it does |
+| --- | --- | --- |
+| linked attachments | on | discovers media references, resolves local files when possible, and attaches labels plus local OCR text to the parent source context |
+| remote media enrichment | on | detects eligible remote media URLs in source text and tries to recover transcript-like text with `summarize --extract`, mainly for youtube and direct audio or video links |
+| raw vision to the LLM | off | sends the actual image bytes to the backend only when you explicitly enable vision and mark the backend as vision-capable |
+
+that split is deliberate. OpenAI-style endpoint compatibility does not guarantee that a model or proxy really supports multimodal image input. `traccia` therefore keeps the context-preserving attachment path on by default, while the raw image lane stays opt-in.
+
+the remote URL lane is deliberately narrower than "summarize every link". for now it only targets media-shaped URLs where transcript recovery materially improves evidence quality without replacing the original source record. a youtube watch URL inside a google activity export is a good example. a random article URL is not.
+
+the config looks like this:
+
+```yaml
+backend:
+  supports_vision: false
+  vision_detail: auto
+
+multimodal:
+  enable_linked_attachments: true
+  enable_vision: false
+  enable_local_image_ocr: true
+  enable_local_media_transcription: true
+  enable_remote_media_enrichment: true
+  audio_transcription_provider: auto
+  audio_transcription_model: turbo
+  audio_transcription_device: cpu
+  remote_media_enrichment_command: summarize
+  max_attachments_per_source: 4
+  max_attachment_text_characters: 1200
+  max_attachment_transcript_characters: 8000
+  max_image_bytes: 5000000
+  ocr_timeout_seconds: 20
+  transcription_timeout_seconds: 1800
+  remote_media_enrichment_timeout_seconds: 180
+```
+
+in practice, `enable_linked_attachments: true` should stay on unless you explicitly want text-only parsing. `enable_vision: true` should only be enabled when the chosen backend model and proxy actually accept image inputs, and `backend.supports_vision: true` should only be marked on for those known-good multimodal endpoints.
+
+`enable_local_image_ocr: true` keeps free local attachment text extraction available even with vision disabled. `enable_local_media_transcription: true` keeps local transcripts available for attached audio and video files. `audio_transcription_provider: auto` currently means "use local `whisper` when it exists, otherwise skip transcription cleanly", and `ffmpeg` is still the local preprocessing step that strips or normalizes audio before transcription.
+
+`enable_remote_media_enrichment: true` enables the new `summarize` lane for remote media URLs that are found inline in the source text. the default command is `summarize`, but `remote_media_enrichment_command` can point at another binary path if you keep it somewhere custom. disabling that flag leaves the original URLs in the source text but stops the extra transcript recovery pass.
+
+with that setup, a post plus its screenshot, photo, chart, or attached image can be analyzed together without forcing every backend into a vision-only contract.
+
+audio and video attachments now follow the same principle. if a source references a local clip, `traccia` can extract a local transcript and attach it back to the parent source context instead of treating the clip as a detached second-class file. that keeps the text post, the media metadata, and the recovered speech in one extraction bundle. if the source instead carries a remote youtube or direct media URL, `traccia` can now recover transcript-like text through `summarize --extract` and keep that alongside the original source event instead of flattening the whole thing into an ungrounded summary.
 
 ## document normalization
 
@@ -169,11 +224,31 @@ document_normalization:
 
 the practical difference is simple. if your PDFs are born-digital and layout-heavy, `marker` is usually the best local first try. if your documents are scanned, mixed, multilingual, or need a specific free OCR engine, `docling` is the more controllable path. `markitdown` stays useful as a lighter markdown fallback, not as the main OCR system.
 
+## doctor
+
+`traccia doctor` now checks more than the scaffold. it also prints the optional local capability surface so you can see what the current machine can actually do before launching a multi-hour ingest.
+
+it reports document normalization availability for `docling`, `markitdown`, and `marker_single`, local image OCR availability through `tesseract`, local media transcription availability through `ffmpeg`, `ffprobe`, and `whisper`, remote media enrichment availability through `summarize`, and backend auth plus optional backend health when `--check-backend` is used.
+
+that split matters in practice. a project can be structurally healthy while still missing the local tools needed for OCR or transcription, and `doctor` now makes that visible up front.
+
 ## what it does today
 
-the current build already handles immutable source intake into `raw/imported/`, file-by-file parsing with span tracking, source classification across authored material and activity traces, and evidence extraction that tries to separate real work from ambient interest. known export families no longer go straight through the same raw path either. google takeout html, meta export html, twitter `window.YTD` javascript payloads, and reddit csv bundles now get normalized into cleaner record-oriented text before the model sees them, while unknown material still falls back to the generic file-by-file lane.
+the current build already handles immutable source intake into `raw/imported/`, file-by-file parsing with span tracking, source classification across authored material and activity traces, and evidence extraction that tries to separate real work from ambient interest. known export families no longer go straight through the same raw path either. google takeout html, csv, json, calendar `.ics`, and gmail `.mbox` exports now get normalized into cleaner record-oriented text before the model sees them, while twitter `window.YTD` javascript payloads and reddit csv bundles also pass through family-aware adapters instead of the raw fallback lane.
+
+that normalization layer also now discovers linked media attachments generically. when a supported export references local media, the parent source can carry attachment metadata, local OCR text, and optional raw image input into the same extraction request instead of losing the relationship between the text and the media. when the source text itself includes eligible remote media URLs, the same attachment lane can now recover transcript-like text through `summarize` without replacing the original export record.
+
+for google takeout specifically, the parser is no longer limited to a generic text wrapper. youtube subscription, comment, and video metadata csvs are now turned into cleaner row-oriented records, broad google json exports such as profile and chrome history are summarized into structured blocks, calendar `.ics` exports become event records, and gmail `.mbox` dumps are compacted into per-message blocks with headers plus body snippets. that is still not the same thing as a perfect first-party schema adapter for every google product, but it is materially better than treating the whole export as opaque text.
 
 the ingest side also writes manifests and live progress state with family and subproduct counts. that means a long-running scan can be inspected as “twitter archive direct-messages” or “instagram export messages” instead of just “generic text files”, and discovery works without requiring backend auth so you can classify an archive before spending any model quota.
+
+directory ingests now also keep a persistent run-state file under `state/ingest-runs/`. if a long scan stops because the backend hits quota or cooldown, the next `ingest-dir` run can fast-resume already completed materials instead of re-parsing and re-extracting them from zero. the immutable manifest snapshots in `state/manifests/` still record what each individual run did, while the resumable state is the mutable operator-facing checkpoint.
+
+long directory runs still checkpoint raw ingest state after each material, but live graph refreshes are batched by default. that keeps crash recovery file-granular while spending model quota on extracting new evidence instead of repeatedly rescoring nearly identical intermediate graphs. tune this under `graph_refresh` in `config.yaml`; the default updates small runs immediately and large runs every 25 newly processed materials or at the final graph sync.
+
+the batch is not a summarization boundary. each material is still parsed independently, large materials are extracted chunk by chunk, and every accepted evidence item is stored separately in SQLite with its source, span, quote, candidate skills, confidence, and timestamps. graph recompute then loads the stored evidence table and compares candidate skills against the existing catalog. that means delayed graph refreshes should not lose per-file or per-chunk information; they only delay when the rendered graph catches up.
+
+each render also now writes a post-run debug bundle under `exports/debug/`. `report.json` is the machine-readable artifact, while `report.md` is the human-readable summary. they include source counts, parser and family breakdowns, attachment counts, evidence distributions, top skills, and pointers to the latest ingest progress, manifest, and resumable run-state files. if you want to regenerate that after review actions or a manual graph rebuild, run `traccia export debug-report`.
 
 the rendering side produces markdown node pages, profile exports, `graph.json`, `tree.json`, an ascii tree, a local static viewer, and an obsidian vault export with actual note generation instead of a dead folder dump.
 
@@ -202,13 +277,15 @@ after ingest, `traccia` renders a graph plus several practical projections aroun
 | `tree/index.md` | top-level skill tree snapshot |
 | `tree/nodes/*.md` | per-skill pages with evidence, timestamps, related skills, and reasoning |
 | `tree/log.md` | render log and longitudinal notes |
-| `graph/graph.json` | full graph export for tooling |
+| `graph/graph.json` | full graph export for tooling, including per-node evidence provenance |
 | `graph/tree.json` | simplified tree projection |
 | `profile/skill.md` | profile-style summary built from the graph |
 | `viewer/index.html` | local static viewer |
 | `exports/obsidian/` | obsidian-friendly note graph export |
 
-each skill node is meant to answer the questions that normal profile tools dodge. where does this skill fit. what evidence supports it. how deep does the work look. how current is it. when did it first show up. when does it look learned rather than merely noticed. when was there strong enough evidence to trust it. how tightly does it connect back into the rest of the self-model.
+each skill node is meant to answer the questions that normal profile tools dodge. where does this skill fit. what evidence supports it. which source file did that evidence come from. how deep does the work look. how current is it. when did it first show up. when does it look learned rather than merely noticed. when was there strong enough evidence to trust it. how tightly does it connect back into the rest of the self-model.
+
+`graph/graph.json` carries this as a compact `provenance` array on each node. by default it keeps full source paths redacted, but still exposes source IDs, filenames, parser/source-family metadata, evidence IDs, timestamps, evidence types, confidence, and redacted excerpts. set `privacy.redact_source_paths_in_exports: false` if you want exported graph nodes to include `uri` and `relativeImportPath` as well.
 
 ## scoring stance
 

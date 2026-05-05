@@ -1,20 +1,32 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import io
 import json
+import mimetypes
+import re
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from traccia.config import TracciaConfig
 from traccia.document_normalizer import DOCUMENT_SOURCE_TYPES, normalize_document
-from traccia.family_normalizer import normalize_family_content
+from traccia.family_normalizer import (
+    collect_attachment_references_from_html,
+    normalize_family_content,
+)
 from traccia.models import (
+    AttachmentKind,
     ParsedDocument,
     ParsedSpan,
     Sensitivity,
+    SourceAttachment,
     SourceCategory,
     SourceDocument,
     SourceFamily,
@@ -36,10 +48,12 @@ SUPPORTED_EXTENSIONS = {
     ".yml": SourceType.TEXT,
     ".toml": SourceType.TEXT,
     ".ini": SourceType.TEXT,
+    ".properties": SourceType.TEXT,
     ".cfg": SourceType.TEXT,
     ".conf": SourceType.TEXT,
     ".env": SourceType.TEXT,
     ".jsonl": SourceType.TEXT,
+    ".json5": SourceType.TEXT,
     ".ndjson": SourceType.TEXT,
     ".py": SourceType.CODE,
     ".js": SourceType.CODE,
@@ -53,8 +67,20 @@ SUPPORTED_EXTENSIONS = {
     ".zsh": SourceType.CODE,
     ".json": SourceType.JSON,
     ".csv": SourceType.CSV,
+    ".xlsx": SourceType.SPREADSHEET,
+    ".ics": SourceType.CALENDAR,
+    ".mbox": SourceType.TEXT,
     ".pdf": SourceType.PDF,
     ".docx": SourceType.DOCX,
+}
+
+COMPRESSED_TEXT_INNER_EXTENSIONS = {
+    ".jsonl",
+    ".ndjson",
+    ".txt",
+    ".log",
+    ".md",
+    ".markdown",
 }
 
 KNOWN_BINARY_EXTENSIONS = {
@@ -63,10 +89,12 @@ KNOWN_BINARY_EXTENSIONS = {
     ".avif",
     ".avi",
     ".bmp",
+    ".deb",
     ".dmg",
     ".exe",
     ".flac",
     ".gif",
+    ".gz",
     ".heic",
     ".heif",
     ".ico",
@@ -78,16 +106,23 @@ KNOWN_BINARY_EXTENSIONS = {
     ".mov",
     ".mp3",
     ".mp4",
+    ".m2ts",
     ".ogg",
     ".otf",
+    ".osz",
     ".png",
+    ".psd",
     ".rar",
+    ".rpm",
     ".ttf",
+    ".tgz",
     ".wav",
     ".webm",
     ".webp",
+    ".wmv",
     ".woff",
     ".woff2",
+    ".mid",
 }
 
 TEXT_READ_ENCODINGS = (
@@ -98,6 +133,8 @@ TEXT_READ_ENCODINGS = (
     "utf-16-be",
     "latin-1",
 )
+
+MAX_UNKNOWN_EXTENSION_TEXT_SNIFF_BYTES = 768 * 1024
 
 
 @dataclass(slots=True)
@@ -116,10 +153,15 @@ class ParsedSourceContent:
     title: str | None
     created_at: datetime | None
     metadata: dict[str, Any]
+    attachments: list[SourceAttachment]
 
 
 def supported_file(path: Path) -> bool:
-    return path.suffix.lower() in SUPPORTED_EXTENSIONS
+    return (
+        path.suffix.lower() in SUPPORTED_EXTENSIONS
+        or _compressed_text_inner_suffix(path) in SUPPORTED_EXTENSIONS
+        or _looks_like_extensionless_text_export(path)
+    )
 
 
 def ingestable_file(path: Path) -> bool:
@@ -127,22 +169,45 @@ def ingestable_file(path: Path) -> bool:
 
 
 def detect_source_type(path: Path) -> SourceType:
-    source_type = SUPPORTED_EXTENSIONS.get(path.suffix.lower())
+    source_type = SUPPORTED_EXTENSIONS.get(_compressed_text_inner_suffix(path) or path.suffix.lower())
     if source_type:
         return source_type
+    if _looks_like_extensionless_text_export(path):
+        return SourceType.TEXT
     if sniff_text_file(path):
         return SourceType.TEXT
     raise ValueError(f"Unsupported source type for path: {path}")
 
 
+def _looks_like_extensionless_text_export(path: Path) -> bool:
+    if path.suffix:
+        return False
+    return "/google ai studio/" in path.as_posix().lower()
+
+
 def sniff_text_file(path: Path) -> bool:
+    if _compressed_text_inner_suffix(path):
+        try:
+            with gzip.open(path, "rb") as handle:
+                return sniff_text_bytes(handle.read(4096))
+        except OSError:
+            return False
     if path.suffix.lower() in KNOWN_BINARY_EXTENSIONS:
+        return False
+    if not path.suffix and _file_too_large_for_unknown_text_sniff(path):
         return False
     try:
         with path.open("rb") as handle:
             return sniff_text_bytes(handle.read(4096))
     except OSError:
         return False
+
+
+def _file_too_large_for_unknown_text_sniff(path: Path) -> bool:
+    try:
+        return path.stat().st_size > MAX_UNKNOWN_EXTENSION_TEXT_SNIFF_BYTES
+    except OSError:
+        return True
 
 
 def sniff_text_bytes(sample: bytes) -> bool:
@@ -209,7 +274,12 @@ def parse_document(
         },
         status=SourceStatus.ACTIVE,
     )
-    return ParsedDocument(source=source, text=parsed_source.text, spans=parsed_source.spans)
+    return ParsedDocument(
+        source=source,
+        text=parsed_source.text,
+        spans=parsed_source.spans,
+        attachments=parsed_source.attachments,
+    )
 
 
 def _parse_source_content(
@@ -222,6 +292,7 @@ def _parse_source_content(
     source_family_subproduct: str | None = None,
 ) -> ParsedSourceContent:
     source_type = detect_source_type(path)
+    attachment_references: list[dict[str, Any]] = []
     family_normalized = normalize_family_content(
         path=path,
         project_relative_path=project_relative_path,
@@ -235,9 +306,11 @@ def _parse_source_content(
         metadata = family_normalized.metadata
         title = family_normalized.title
         created_at = family_normalized.created_at
+        attachment_references = list(metadata.get("attachment_references") or [])
     if source_type == SourceType.JSON:
         if not family_normalized:
             payload = json.loads(_read_text_with_fallback(path))
+            attachment_references = _collect_json_attachment_references(payload)
             structured = _parse_structured_json_source(
                 payload=payload,
                 path=path,
@@ -245,6 +318,19 @@ def _parse_source_content(
                 source_id=source_id,
             )
             if structured:
+                remote_media_references = _collect_remote_media_url_references_from_text(structured.text)
+                combined_attachment_references = attachment_references + remote_media_references
+                structured.attachments = _build_linked_attachments(
+                    source_path=path,
+                    attachment_references=combined_attachment_references,
+                    config=config,
+                )
+                if combined_attachment_references:
+                    structured.metadata["attachment_reference_count"] = len(combined_attachment_references)
+                if remote_media_references:
+                    structured.metadata["remote_media_reference_count"] = len(remote_media_references)
+                if structured.attachments:
+                    structured.metadata["attachment_count"] = len(structured.attachments)
                 return structured
             text = json.dumps(payload, indent=2, sort_keys=True)
             parser = _parser_name(source_type)
@@ -261,6 +347,8 @@ def _parse_source_content(
             created_at = None
     elif not family_normalized:
         text = _read_text(path, source_type)
+        if source_type == SourceType.TEXT and path.suffix.lower() in {".html", ".htm"}:
+            attachment_references = collect_attachment_references_from_html(text)
         parser = _parser_name(source_type)
         metadata = {}
         title = None
@@ -272,6 +360,20 @@ def _parse_source_content(
         source_type=source_type,
         text=text,
     )
+    metadata = dict(metadata)
+    remote_media_references = _collect_remote_media_url_references_from_text(text)
+    combined_attachment_references = attachment_references + remote_media_references
+    attachments = _build_linked_attachments(
+        source_path=path,
+        attachment_references=combined_attachment_references,
+        config=config,
+    )
+    if combined_attachment_references:
+        metadata["attachment_reference_count"] = len(combined_attachment_references)
+    if remote_media_references:
+        metadata["remote_media_reference_count"] = len(remote_media_references)
+    if attachments:
+        metadata["attachment_count"] = len(attachments)
     return ParsedSourceContent(
         text=text,
         spans=_segment_text(text=text, source_id=source_id),
@@ -281,11 +383,12 @@ def _parse_source_content(
         title=title,
         created_at=created_at,
         metadata=metadata,
+        attachments=attachments,
     )
 
 
 def _read_text(path: Path, source_type: SourceType) -> str:
-    if source_type in {SourceType.MARKDOWN, SourceType.TEXT, SourceType.CODE}:
+    if source_type in {SourceType.MARKDOWN, SourceType.TEXT, SourceType.CODE, SourceType.CALENDAR}:
         return _read_text_with_fallback(path)
     if source_type == SourceType.JSON:
         payload = json.loads(_read_text_with_fallback(path))
@@ -297,10 +400,39 @@ def _read_text(path: Path, source_type: SourceType) -> str:
         for row in reader:
             rows.append(", ".join(f"{key}={value}" for key, value in row.items()))
         return "\n".join(rows)
+    if source_type == SourceType.SPREADSHEET:
+        return _read_spreadsheet_text(path)
     raise ValueError(f"Unsupported source type: {source_type}")
 
 
+def _read_spreadsheet_text(path: Path) -> str:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    try:
+        blocks: list[str] = []
+        for worksheet in workbook.worksheets:
+            rows: list[str] = []
+            for row in worksheet.iter_rows(values_only=True):
+                values = [str(value).strip() for value in row if value is not None and str(value).strip()]
+                if values:
+                    rows.append(" | ".join(values))
+            if rows:
+                blocks.append(f"# Sheet: {worksheet.title}\n" + "\n".join(rows))
+        return "\n\n".join(blocks)
+    finally:
+        workbook.close()
+
+
 def _read_text_with_fallback(path: Path) -> str:
+    if _compressed_text_inner_suffix(path):
+        raw = gzip.decompress(path.read_bytes())
+        for encoding in TEXT_READ_ENCODINGS:
+            try:
+                return raw.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("utf-8", errors="replace")
     for encoding in TEXT_READ_ENCODINGS:
         try:
             return path.read_text(encoding=encoding)
@@ -316,6 +448,7 @@ def _parser_name(source_type: SourceType) -> str:
         SourceType.CODE: "code",
         SourceType.JSON: "json",
         SourceType.CSV: "csv",
+        SourceType.SPREADSHEET: "xlsx",
         SourceType.PDF: "pypdf",
         SourceType.DOCX: "python-docx",
         SourceType.CHAT: "chat",
@@ -329,6 +462,7 @@ def _parser_name(source_type: SourceType) -> str:
 
 
 def _guess_language(path: Path) -> str | None:
+    suffix = _compressed_text_inner_suffix(path) or path.suffix.lower()
     return {
         ".py": "python",
         ".js": "javascript",
@@ -350,7 +484,17 @@ def _guess_language(path: Path) -> str | None:
         ".htm": "html",
         ".xml": "xml",
         ".csv": "csv",
-    }.get(path.suffix.lower())
+    }.get(suffix)
+
+
+def _compressed_text_inner_suffix(path: Path) -> str | None:
+    suffixes = [suffix.lower() for suffix in path.suffixes]
+    if len(suffixes) < 2 or suffixes[-1] != ".gz":
+        return None
+    inner_suffix = suffixes[-2]
+    if inner_suffix in COMPRESSED_TEXT_INNER_EXTENSIONS:
+        return inner_suffix
+    return None
 
 
 def _segment_text(*, text: str, source_id: str) -> list[ParsedSpan]:
@@ -487,6 +631,7 @@ def _parse_ai_conversation_export(*, payload: object, source_id: str) -> ParsedS
             "structured_export_kind": "ai_conversation",
             "message_count": len(entries),
         },
+        attachments=[],
     )
 
 
@@ -561,6 +706,7 @@ def _parse_reddit_export(*, payload: object, source_id: str) -> ParsedSourceCont
             "post_count": post_count,
             "comment_count": comment_count,
         },
+        attachments=[],
     )
 
 
@@ -601,6 +747,7 @@ def _parse_google_activity_export(*, payload: object, source_id: str) -> ParsedS
             "structured_export_kind": "google_activity",
             "activity_count": len(entries),
         },
+        attachments=[],
     )
 
 
@@ -703,6 +850,14 @@ def _classify_source_category(
         return SourceCategory.AI_DIALOGUE
     if any(token in lowered_path or token in filename for token in ("reddit", "twitter", "tweet", "x-", "mastodon", "forum", "discord", "slack", "social", "profile", "linkedin")):
         return SourceCategory.SOCIAL_OR_COMMUNITY_TRACE
+    if source_type in {
+        SourceType.MARKDOWN,
+        SourceType.TEXT,
+        SourceType.DOCX,
+        SourceType.PDF,
+        SourceType.SPREADSHEET,
+    } and any(token in lowered_path for token in ("/drive/", "drive/")):
+        return SourceCategory.AUTHORED_CONTENT
     if any(token in lowered_path or token in filename for token in ("takeout", "export", "search", "history", "activity", "browser", "watch-history", "bookmarks")):
         return SourceCategory.PLATFORM_EXPORT_ACTIVITY
     if any(token in lowered_path or token in filename for token in ("issue", "ticket", "review", "pull-request", "pr-", "standup", "retro", "meeting")):
@@ -711,7 +866,13 @@ def _classify_source_category(
         return SourceCategory.PRODUCED_ARTIFACT
     if source_type in {SourceType.JSON, SourceType.CSV}:
         return SourceCategory.METADATA_ONLY_ACTIVITY
-    if source_type in {SourceType.MARKDOWN, SourceType.TEXT, SourceType.DOCX, SourceType.PDF}:
+    if source_type in {
+        SourceType.MARKDOWN,
+        SourceType.TEXT,
+        SourceType.DOCX,
+        SourceType.PDF,
+        SourceType.SPREADSHEET,
+    }:
         return SourceCategory.AUTHORED_CONTENT
     return SourceCategory.AUTHORED_CONTENT
 
@@ -726,3 +887,506 @@ def _classification_reason(
         f"classified_as={source_category.value} "
         f"from path={project_relative_path.as_posix()} filename={path.name}"
     )
+
+
+_ATTACHMENT_SUFFIX_TO_KIND = {
+    ".jpg": AttachmentKind.IMAGE,
+    ".jpeg": AttachmentKind.IMAGE,
+    ".png": AttachmentKind.IMAGE,
+    ".gif": AttachmentKind.IMAGE,
+    ".webp": AttachmentKind.IMAGE,
+    ".bmp": AttachmentKind.IMAGE,
+    ".svg": AttachmentKind.IMAGE,
+    ".avif": AttachmentKind.IMAGE,
+    ".heic": AttachmentKind.IMAGE,
+    ".heif": AttachmentKind.IMAGE,
+    ".mp4": AttachmentKind.VIDEO,
+    ".mov": AttachmentKind.VIDEO,
+    ".mkv": AttachmentKind.VIDEO,
+    ".webm": AttachmentKind.VIDEO,
+    ".avi": AttachmentKind.VIDEO,
+    ".mp3": AttachmentKind.AUDIO,
+    ".wav": AttachmentKind.AUDIO,
+    ".m4a": AttachmentKind.AUDIO,
+    ".ogg": AttachmentKind.AUDIO,
+    ".flac": AttachmentKind.AUDIO,
+    ".aac": AttachmentKind.AUDIO,
+    ".pdf": AttachmentKind.DOCUMENT,
+}
+
+_ATTACHMENT_LIKE_KEYS = (
+    "image",
+    "img",
+    "photo",
+    "video",
+    "audio",
+    "media",
+    "thumbnail",
+    "thumb",
+    "preview",
+    "poster",
+    "attachment",
+    "asset",
+    "icon",
+    "cover",
+    "banner",
+    "src",
+)
+
+_REMOTE_MEDIA_URL_PATTERN = re.compile(r"https?://[^\s<>'\")\]]+")
+_REMOTE_MEDIA_HOSTS = {
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtu.be",
+    "www.youtu.be",
+    "youtube-nocookie.com",
+    "www.youtube-nocookie.com",
+}
+_REMOTE_MEDIA_ATTACHMENT_KINDS = {
+    AttachmentKind.VIDEO,
+    AttachmentKind.AUDIO,
+}
+
+
+def _collect_json_attachment_references(value: object, *, key_hint: str | None = None) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            references.extend(_collect_json_attachment_references(nested_value, key_hint=str(key)))
+        return references
+    if isinstance(value, list):
+        for item in value:
+            references.extend(_collect_json_attachment_references(item, key_hint=key_hint))
+        return references
+
+    if key_hint and not any(token in key_hint.lower() for token in _ATTACHMENT_LIKE_KEYS):
+        return []
+
+    reference = _attachment_reference_from_value(value, contextual_hint=key_hint)
+    return [reference] if reference else []
+
+
+def _attachment_reference_from_value(
+    value: object,
+    *,
+    label: str | None = None,
+    contextual_hint: str | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    parsed = urlparse(cleaned)
+    suffix = Path(parsed.path or cleaned).suffix.lower()
+    kind = _ATTACHMENT_SUFFIX_TO_KIND.get(suffix)
+    if kind is None:
+        return None
+    payload: dict[str, Any] = {
+        "reference": cleaned,
+        "kind": kind.value,
+    }
+    if label:
+        payload["label"] = label
+    if contextual_hint:
+        payload["contextual_hint"] = contextual_hint
+    return payload
+
+
+def _collect_remote_media_url_references_from_text(text: str) -> list[dict[str, Any]]:
+    references: list[dict[str, Any]] = []
+    for match in _REMOTE_MEDIA_URL_PATTERN.finditer(text):
+        reference = _remote_media_reference_from_url(
+            match.group(0),
+            contextual_hint="inline_media_url",
+        )
+        if reference:
+            references.append(reference)
+    return references
+
+
+def _remote_media_reference_from_url(
+    value: str,
+    *,
+    contextual_hint: str | None = None,
+) -> dict[str, Any] | None:
+    cleaned = value.rstrip(".,;:!?)]}\"'")
+    parsed = urlparse(cleaned)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+
+    host = parsed.netloc.lower().split("@")[-1].split(":", 1)[0]
+    if host in _REMOTE_MEDIA_HOSTS:
+        kind = AttachmentKind.VIDEO
+    else:
+        suffix = Path(parsed.path).suffix.lower()
+        kind = _ATTACHMENT_SUFFIX_TO_KIND.get(suffix)
+        if kind not in _REMOTE_MEDIA_ATTACHMENT_KINDS:
+            return None
+
+    payload: dict[str, Any] = {
+        "reference": cleaned,
+        "kind": kind.value,
+    }
+    if contextual_hint:
+        payload["contextual_hint"] = contextual_hint
+    return payload
+
+
+def _build_linked_attachments(
+    *,
+    source_path: Path,
+    attachment_references: list[dict[str, Any]],
+    config: TracciaConfig | None,
+) -> list[SourceAttachment]:
+    if config and not config.multimodal.enable_linked_attachments:
+        return []
+
+    max_attachments = config.multimodal.max_attachments_per_source if config else 4
+    max_attachment_text_characters = (
+        config.multimodal.max_attachment_text_characters if config else 1200
+    )
+    max_attachment_transcript_characters = (
+        config.multimodal.max_attachment_transcript_characters if config else 8000
+    )
+    enable_local_image_ocr = config.multimodal.enable_local_image_ocr if config else True
+    enable_local_media_transcription = (
+        config.multimodal.enable_local_media_transcription if config else True
+    )
+    transcription_provider = (
+        config.multimodal.audio_transcription_provider if config else "auto"
+    )
+    transcription_model = (
+        config.multimodal.audio_transcription_model if config else "turbo"
+    )
+    transcription_device = (
+        config.multimodal.audio_transcription_device if config else "cpu"
+    )
+    ocr_timeout_seconds = config.multimodal.ocr_timeout_seconds if config else 20
+    transcription_timeout_seconds = (
+        config.multimodal.transcription_timeout_seconds if config else 1800
+    )
+    enable_remote_media_enrichment = (
+        config.multimodal.enable_remote_media_enrichment if config else True
+    )
+    remote_media_enrichment_command = (
+        config.multimodal.remote_media_enrichment_command if config else "summarize"
+    )
+    remote_media_enrichment_timeout_seconds = (
+        config.multimodal.remote_media_enrichment_timeout_seconds if config else 180
+    )
+
+    attachments: list[SourceAttachment] = []
+    seen: set[tuple[str, str]] = set()
+
+    for reference_payload in attachment_references:
+        if len(attachments) >= max_attachments:
+            break
+        reference = str(reference_payload.get("reference") or "").strip()
+        kind_value = str(reference_payload.get("kind") or "").strip()
+        if not reference or not kind_value:
+            continue
+        dedupe_key = (kind_value, reference)
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        kind = AttachmentKind(kind_value)
+        resolved_path = _resolve_attachment_path(source_path=source_path, reference=reference)
+        uri = None
+        mime_type = None
+        extracted_text = None
+        attachment_metadata: dict[str, Any] = {}
+        if resolved_path:
+            uri = resolved_path.as_uri()
+            mime_type = mimetypes.guess_type(resolved_path.name)[0]
+            if kind == AttachmentKind.IMAGE and enable_local_image_ocr:
+                extracted_text = _extract_image_text(
+                    resolved_path,
+                    max_characters=max_attachment_text_characters,
+                    timeout_seconds=ocr_timeout_seconds,
+                )
+            elif kind in {AttachmentKind.AUDIO, AttachmentKind.VIDEO} and enable_local_media_transcription:
+                extracted_text, attachment_metadata = _extract_media_text(
+                    resolved_path,
+                    kind=kind,
+                    provider=transcription_provider,
+                    model=transcription_model,
+                    device=transcription_device,
+                    max_characters=max_attachment_transcript_characters,
+                    timeout_seconds=transcription_timeout_seconds,
+                )
+        elif reference.startswith(("http://", "https://", "file://")):
+            uri = reference
+            mime_type = mimetypes.guess_type(reference)[0]
+            if enable_remote_media_enrichment and kind in _REMOTE_MEDIA_ATTACHMENT_KINDS:
+                extracted_text, attachment_metadata = _extract_remote_media_text(
+                    reference,
+                    command=remote_media_enrichment_command,
+                    max_characters=max_attachment_transcript_characters,
+                    timeout_seconds=remote_media_enrichment_timeout_seconds,
+                )
+
+        attachments.append(
+            SourceAttachment(
+                attachment_id=f"att_{short_hash(f'{source_path}:{reference}:{kind.value}', length=12)}",
+                kind=kind,
+                reference=reference,
+                resolved_path=resolved_path.as_posix() if resolved_path else None,
+                uri=uri,
+                mime_type=mime_type,
+                label=str(reference_payload.get("label") or "").strip() or None,
+                extracted_text=extracted_text,
+                contextual_hint=str(reference_payload.get("contextual_hint") or "").strip() or None,
+                metadata=attachment_metadata,
+            )
+        )
+
+    return attachments
+
+
+def _resolve_attachment_path(*, source_path: Path, reference: str) -> Path | None:
+    if reference.startswith(("http://", "https://", "data:")):
+        return None
+    if reference.startswith("file://"):
+        candidate = Path(reference.removeprefix("file://"))
+        return candidate.resolve() if candidate.exists() else None
+
+    parsed = urlparse(reference)
+    raw_path = parsed.path or reference
+    if not raw_path:
+        return None
+
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = (source_path.parent / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+    return candidate if candidate.exists() else None
+
+
+def _extract_image_text(path: Path, *, max_characters: int, timeout_seconds: int) -> str | None:
+    if path.suffix.lower() == ".svg":
+        return None
+    try:
+        completed = subprocess.run(
+            ["tesseract", str(path), "stdout", "--psm", "6"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, TimeoutError):
+        return None
+    if completed.returncode != 0:
+        return None
+    normalized = " ".join(completed.stdout.split())
+    if not normalized:
+        return None
+    return normalized[:max_characters]
+
+def _extract_media_text(
+    path: Path,
+    *,
+    kind: AttachmentKind,
+    provider: str,
+    model: str,
+    device: str,
+    max_characters: int,
+    timeout_seconds: int,
+) -> tuple[str | None, dict[str, Any]]:
+    resolved_provider = _resolve_media_transcription_provider(provider)
+    if resolved_provider is None:
+        return None, {}
+    if shutil.which("ffmpeg") is None or shutil.which("whisper") is None:
+        return None, {}
+
+    with tempfile.TemporaryDirectory(prefix="traccia-media-") as temp_dir:
+        temp_root = Path(temp_dir)
+        normalized_audio_path = temp_root / "attachment.wav"
+        if not _normalize_media_audio(
+            source_path=path,
+            output_path=normalized_audio_path,
+            kind=kind,
+            timeout_seconds=timeout_seconds,
+        ):
+            return None, {}
+
+        transcript = _transcribe_audio_with_whisper(
+            normalized_audio_path,
+            model=model,
+            device=device,
+            timeout_seconds=timeout_seconds,
+        )
+        if not transcript:
+            return None, {}
+        normalized = " ".join(transcript.split())
+        if not normalized:
+            return None, {}
+        return (
+            normalized[:max_characters],
+            {
+                "transcription_provider": resolved_provider,
+                "transcription_model": model,
+                "transcription_device": device,
+            },
+        )
+
+
+def _extract_remote_media_text(
+    reference: str,
+    *,
+    command: str,
+    max_characters: int,
+    timeout_seconds: int,
+) -> tuple[str | None, dict[str, Any]]:
+    executable = command.strip()
+    if not executable:
+        return None, {}
+
+    if "/" in executable:
+        if not Path(executable).exists():
+            return None, {}
+        executable_label = Path(executable).name
+    else:
+        if shutil.which(executable) is None:
+            return None, {}
+        executable_label = executable
+
+    process_command = [
+        executable,
+        reference,
+        "--extract",
+        "--plain",
+        "--format",
+        "text",
+        "--video-mode",
+        "transcript",
+        "--youtube",
+        "auto",
+        "--timeout",
+        f"{timeout_seconds}s",
+        "--max-extract-characters",
+        str(max_characters),
+    ]
+    try:
+        completed = subprocess.run(
+            process_command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds + 15,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, TimeoutError):
+        return None, {}
+    if completed.returncode != 0:
+        return None, {}
+
+    normalized = " ".join(completed.stdout.split())
+    if not normalized:
+        return None, {}
+    return (
+        normalized[:max_characters],
+        {
+            "url_enrichment_provider": "summarize_cli",
+            "url_enrichment_command": executable_label,
+            "url_enrichment_mode": "extract",
+        },
+    )
+
+def _resolve_media_transcription_provider(provider: str) -> str | None:
+    normalized = provider.strip().lower()
+    if normalized in {"none", "disabled"}:
+        return None
+    if normalized == "auto":
+        return "whisper_cli" if shutil.which("whisper") else None
+    if normalized in {"whisper", "whisper_cli"}:
+        return "whisper_cli"
+    raise ValueError(f"Unsupported multimodal.audio_transcription_provider: {provider}")
+
+def _normalize_media_audio(
+    *,
+    source_path: Path,
+    output_path: Path,
+    kind: AttachmentKind,
+    timeout_seconds: int,
+) -> bool:
+    command = [
+        "ffmpeg",
+        "-nostdin",
+        "-y",
+        "-i",
+        str(source_path),
+    ]
+    if kind == AttachmentKind.VIDEO:
+        command.append("-vn")
+    command.extend(
+        [
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            str(output_path),
+        ]
+    )
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, TimeoutError):
+        return False
+    return completed.returncode == 0 and output_path.exists()
+
+def _transcribe_audio_with_whisper(
+    audio_path: Path,
+    *,
+    model: str,
+    device: str,
+    timeout_seconds: int,
+) -> str | None:
+    output_dir = audio_path.parent
+    command = [
+        "whisper",
+        str(audio_path),
+        "--model",
+        model,
+        "--device",
+        device,
+        "--output_dir",
+        str(output_dir),
+        "--output_format",
+        "json",
+        "--task",
+        "transcribe",
+        "--verbose",
+        "False",
+    ]
+    if device.strip().lower() == "cpu":
+        command.extend(["--fp16", "False"])
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, TimeoutError):
+        return None
+    if completed.returncode != 0:
+        return None
+    transcript_path = output_dir / f"{audio_path.stem}.json"
+    if not transcript_path.exists():
+        return None
+    try:
+        payload = json.loads(transcript_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    text = payload.get("text")
+    return text.strip() if isinstance(text, str) and text.strip() else None

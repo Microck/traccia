@@ -21,6 +21,7 @@ class SourceType(StrEnum):
     CODE = "code"
     JSON = "json"
     CSV = "csv"
+    SPREADSHEET = "spreadsheet"
     CALENDAR = "calendar"
     CHAT = "chat"
     BOOKMARKS = "bookmarks"
@@ -28,6 +29,15 @@ class SourceType(StrEnum):
     PORTFOLIO = "portfolio"
     SLIDES = "slides"
     IMAGE = "image"
+
+
+class AttachmentKind(StrEnum):
+    IMAGE = "image"
+    VIDEO = "video"
+    AUDIO = "audio"
+    DOCUMENT = "document"
+    LINK = "link"
+    OTHER = "other"
 
 
 class Sensitivity(StrEnum):
@@ -192,6 +202,19 @@ class EvidenceItem(TracciaModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class SourceAttachment(TracciaModel):
+    attachment_id: str
+    kind: AttachmentKind
+    reference: str
+    resolved_path: str | None = None
+    uri: str | None = None
+    mime_type: str | None = None
+    label: str | None = None
+    extracted_text: str | None = None
+    contextual_hint: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class SkillNode(TracciaModel):
     skill_id: str
     kind: SkillKind
@@ -276,6 +299,7 @@ class ParsedDocument(TracciaModel):
     source: SourceDocument
     text: str
     spans: list[ParsedSpan] = Field(default_factory=list)
+    attachments: list[SourceAttachment] = Field(default_factory=list)
 
 
 class IngestManifestEntry(TracciaModel):
@@ -287,10 +311,19 @@ class IngestManifestEntry(TracciaModel):
     detection_reason: str
     status: IngestMaterialStatus
     source_id: str | None = None
+    source_sha256: str | None = None
+    error: str | None = None
 
 
 class IngestManifest(TracciaModel):
     manifest_id: str
     root_uri: str
     generated_at: datetime
+    materials: list[IngestManifestEntry] = Field(default_factory=list)
+
+
+class IngestRunState(TracciaModel):
+    root_uri: str
+    updated_at: datetime
+    total_materials: int = Field(ge=0)
     materials: list[IngestManifestEntry] = Field(default_factory=list)

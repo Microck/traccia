@@ -1,4 +1,7 @@
 import json
+import os
+import stat
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -69,6 +72,10 @@ def test_doctor_reports_backend_state_without_failing_for_missing_auth(tmp_path:
 
     assert result.exit_code == 0, result.stdout
     assert "backend:" in result.stdout
+    assert "document normalization:" in result.stdout
+    assert "image OCR" in result.stdout
+    assert "media transcription" in result.stdout
+    assert "remote media enrichment" in result.stdout
     assert "backend auth: missing env var OPENAI_API_KEY" in result.stdout
     assert "Phase 0 scaffold looks healthy." in result.stdout
 
@@ -275,6 +282,201 @@ def test_openai_compatible_backend_repairs_invalid_json_escapes(monkeypatch) -> 
         thread.join(timeout=5)
 
 
+def test_traccia_ingest_loop_honors_long_backend_cooldown_window(tmp_path: Path) -> None:
+    runner_script = Path(__file__).resolve().parents[1] / "scripts" / "traccia-ingest-loop.sh"
+    project_root = tmp_path / "project"
+    input_root = tmp_path / "input"
+    fake_bin = tmp_path / "bin"
+    sleep_record = tmp_path / "sleep-seconds.txt"
+    runner_env = project_root / "state" / "runner.env"
+
+    project_root.mkdir()
+    input_root.mkdir()
+    fake_bin.mkdir()
+    runner_env.parent.mkdir(parents=True)
+    runner_env.write_text("export CLIPROXYAPI_KEY=test-key\n")
+
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "cat <<'EOF'",
+                "BackendError: LLM backend request failed (429):",
+                '{"error":{"code":"model_cooldown","message":"All credentials for model star-gemini-3-flash are cooling down via provider star-gemini-bridge","model":"star-gemini-3-flash","provider":"star-gemini-bridge","reset_seconds":1781,"reset_time":"29m41s"}}',
+                "EOF",
+                "exit 1",
+                "",
+            ]
+        )
+    )
+    fake_uv.chmod(fake_uv.stat().st_mode | stat.S_IEXEC)
+
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                f"printf '%s' \"$1\" > {sleep_record}",
+                "exit 99",
+                "",
+            ]
+        )
+    )
+    fake_sleep.chmod(fake_sleep.stat().st_mode | stat.S_IEXEC)
+
+    env = os.environ.copy()
+    env["CLIPROXYAPI_KEY"] = "test-key"
+    env["UV_BIN"] = str(fake_uv)
+    env["TRACCIA_GLM_LOCK_PATH"] = str(tmp_path / "glm.lock")
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    completed = subprocess.run(
+        [str(runner_script), str(input_root), str(project_root), str(runner_env)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert completed.returncode == 99
+    assert sleep_record.read_text() == "1781"
+    log_text = (project_root / "runner.log").read_text()
+    assert "cooldown detected from backend output" in log_text
+    assert "sleeping 1781s before retry" in log_text
+
+
+def test_traccia_ingest_loop_honors_wrapped_reset_seconds_from_log_output(tmp_path: Path) -> None:
+    runner_script = Path(__file__).resolve().parents[1] / "scripts" / "traccia-ingest-loop.sh"
+    project_root = tmp_path / "project"
+    input_root = tmp_path / "input"
+    fake_bin = tmp_path / "bin"
+    sleep_record = tmp_path / "sleep-seconds.txt"
+    runner_env = project_root / "state" / "runner.env"
+
+    project_root.mkdir()
+    input_root.mkdir()
+    fake_bin.mkdir()
+    runner_env.parent.mkdir(parents=True)
+    runner_env.write_text("export CLIPROXYAPI_KEY=test-key\n")
+
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "cat <<'EOF'",
+                "BackendError: LLM backend request failed (429): ",
+                '{"error":{"code":"model_cooldown","message":"All credentials for model ',
+                "star-gemini-3-flash are cooling down via provider ",
+                'star-gemini-bridge","model":"star-gemini-3-flash","provider":"star-gemini-bridge","rese',
+                't_seconds":973,"reset_time":"16m13s"}}',
+                "EOF",
+                "exit 1",
+                "",
+            ]
+        )
+    )
+    fake_uv.chmod(fake_uv.stat().st_mode | stat.S_IEXEC)
+
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                f"printf '%s' \"$1\" > {sleep_record}",
+                "exit 99",
+                "",
+            ]
+        )
+    )
+    fake_sleep.chmod(fake_sleep.stat().st_mode | stat.S_IEXEC)
+
+    env = os.environ.copy()
+    env["CLIPROXYAPI_KEY"] = "test-key"
+    env["UV_BIN"] = str(fake_uv)
+    env["TRACCIA_GLM_LOCK_PATH"] = str(tmp_path / "glm.lock")
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    completed = subprocess.run(
+        [str(runner_script), str(input_root), str(project_root), str(runner_env)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert completed.returncode == 99
+    assert sleep_record.read_text() == "973"
+    log_text = (project_root / "runner.log").read_text()
+    assert "cooldown detected from backend output" in log_text
+    assert "sleeping 973s before retry" in log_text
+
+
+def test_traccia_ingest_loop_honors_gemini_human_quota_reset_duration(tmp_path: Path) -> None:
+    runner_script = Path(__file__).resolve().parents[1] / "scripts" / "traccia-ingest-loop.sh"
+    project_root = tmp_path / "project"
+    input_root = tmp_path / "input"
+    fake_bin = tmp_path / "bin"
+    sleep_record = tmp_path / "sleep-seconds.txt"
+    runner_env = project_root / "state" / "runner.env"
+
+    project_root.mkdir()
+    input_root.mkdir()
+    fake_bin.mkdir()
+    runner_env.parent.mkdir(parents=True)
+    runner_env.write_text("export CLIPROXYAPI_KEY=test-key\n")
+
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "cat <<'EOF'",
+                'BackendError: LLM backend request failed (502): {"error":{"message":"All providers failed for model \\"gemini-3-flash\\". Last error: You have exhausted your capacity on this model. Your quota will reset after',
+                '9h40m8s.","type":"provider_error","param":null,"code":"provider_error"}}',
+                "EOF",
+                "exit 1",
+                "",
+            ]
+        )
+    )
+    fake_uv.chmod(fake_uv.stat().st_mode | stat.S_IEXEC)
+
+    fake_sleep = fake_bin / "sleep"
+    fake_sleep.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                f"printf '%s' \"$1\" > {sleep_record}",
+                "exit 99",
+                "",
+            ]
+        )
+    )
+    fake_sleep.chmod(fake_sleep.stat().st_mode | stat.S_IEXEC)
+
+    env = os.environ.copy()
+    env["CLIPROXYAPI_KEY"] = "test-key"
+    env["UV_BIN"] = str(fake_uv)
+    env["TRACCIA_GLM_LOCK_PATH"] = str(tmp_path / "glm.lock")
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    completed = subprocess.run(
+        [str(runner_script), str(input_root), str(project_root), str(runner_env)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert completed.returncode == 99
+    assert sleep_record.read_text() == "34808"
+    log_text = (project_root / "runner.log").read_text()
+    assert "cooldown detected from backend output" in log_text
+    assert "sleeping 34808s before retry" in log_text
+
+
 def test_openai_compatible_backend_uses_full_validation_retry_budget(monkeypatch) -> None:
     attempts = {"count": 0}
 
@@ -472,7 +674,8 @@ def test_openai_compatible_backend_uses_longer_backoff_for_auth_unavailable(monk
         )
 
         assert payload.rationale == "recovered after auth retry"
-        assert sleep_calls[:2] == [5.0, 10.0]
+        backend_retry_sleeps = [duration for duration in sleep_calls if duration >= 0.5]
+        assert backend_retry_sleeps[:2] == [5.0, 10.0]
     finally:
         server.shutdown()
         thread.join(timeout=5)

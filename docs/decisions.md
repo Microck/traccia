@@ -128,6 +128,23 @@ Important implication:
 - no direct profile writing from raw files
 - no prerequisite hallucination path in MVP
 
+### 4.1 Evidence is the durable boundary, not live graph refresh
+
+For long directory ingests, live graph refreshes may be batched without changing extraction semantics.
+
+Decision:
+- extraction remains source-scoped and chunk-scoped
+- every accepted evidence item is stored separately before graph recompute
+- graph recompute reads stored evidence from SQLite and compares candidate skills against the current catalog
+- batching controls only when the rendered graph projection is refreshed
+- the system must not replace multiple materials with one lossy batch summary before skill inference
+
+Reasoning:
+- source-scoped extraction prevents an early graph mistake from biasing later extraction
+- per-source evidence preserves provenance, quotes, timestamps, and reviewability
+- batched graph refreshes spend model quota on new evidence before repeated scoring of near-identical intermediate graphs
+- final output quality depends on the complete stored evidence set, not on how often intermediate graph files were rendered
+
 ## 5. GitHub research summary
 
 The GitHub research confirmed that there is no strong open-source exact match for `traccia`.

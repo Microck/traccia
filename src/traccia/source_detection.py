@@ -12,8 +12,20 @@ GOOGLE_TAKEOUT_MARKERS = (
     "takeout/",
     "my activity/",
     "youtube and youtube music/",
+    "youtube y youtube music/",
     "chrome/",
     "location history/",
+    "correo/",
+    "mail/",
+    "calendar/",
+    "perfil/",
+    "profile/",
+    "gemini/",
+    "drive/",
+    "mi actividad/",
+    "my activity/",
+    "google chat/",
+    "notebooklm/",
 )
 
 TWITTER_ARCHIVE_MARKERS = (
@@ -60,9 +72,32 @@ FACEBOOK_EXPORT_MARKERS = (
 
 GOOGLE_SUBPRODUCT_MARKERS = (
     ("my activity/", "my-activity"),
+    ("mi actividad/", "my-activity"),
     ("youtube and youtube music/", "youtube-and-youtube-music"),
+    ("youtube y youtube music/", "youtube-and-youtube-music"),
     ("chrome/", "chrome"),
+    ("drive/", "drive"),
     ("location history/", "location-history"),
+    ("correo/", "mail"),
+    ("mail/", "mail"),
+    ("calendar/", "calendar"),
+    ("contactos/", "contacts"),
+    ("contacts/", "contacts"),
+    ("perfil/", "profile"),
+    ("profile/", "profile"),
+    ("gemini/", "gemini"),
+    ("google chat/", "google-chat"),
+    ("notebooklm/", "notebooklm"),
+    ("maps/", "maps"),
+    ("grupos/", "groups"),
+    ("groups/", "groups"),
+    ("fit/", "fit"),
+    ("tareas/", "tasks"),
+    ("discover/", "discover"),
+    ("noticias/", "news"),
+    ("news/", "news"),
+    ("google shopping/", "google-shopping"),
+    ("google play store/", "google-play-store"),
 )
 
 TWITTER_SUBPRODUCT_MARKERS = (

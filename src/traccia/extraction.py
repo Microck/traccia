@@ -147,6 +147,7 @@ def _artifact_candidates(source_type: SourceType) -> list[str]:
         SourceType.CODE: ["source code"],
         SourceType.MARKDOWN: ["markdown document"],
         SourceType.CSV: ["spreadsheet export"],
+        SourceType.SPREADSHEET: ["spreadsheet workbook"],
         SourceType.JSON: ["json artifact"],
         SourceType.PDF: ["pdf document"],
         SourceType.DOCX: ["docx document"],
@@ -158,6 +159,7 @@ def _infer_from_source_type(source_type: SourceType) -> list[str]:
     return {
         SourceType.CODE: ["Python"],
         SourceType.CSV: ["Documentation"],
+        SourceType.SPREADSHEET: ["Documentation"],
     }.get(source_type, [])
 
 

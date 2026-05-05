@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
+import mailbox
 import types
 from pathlib import Path
 
 import pytest
 from docx import Document as DocxDocument
+from openpyxl import Workbook
 
 import traccia.document_normalizer as document_normalizer
 from traccia.config import TracciaConfig
-from traccia.models import SourceCategory, SourceFamily, SourceType
+from traccia.models import AttachmentKind, SourceCategory, SourceFamily, SourceType
 from traccia.parsers import ingestable_file, parse_document
 
 
@@ -99,7 +101,7 @@ def test_parse_twitter_archive_js_uses_family_normalizer(tmp_path: Path) -> None
           {
             "account": {
               "username": "JustMicrock",
-              "email": "gkievfx@gmail.com",
+              "email": "archive-owner@example.com",
               "createdAt": "2019-12-02T14:21:19.009Z"
             }
           }
@@ -118,7 +120,30 @@ def test_parse_twitter_archive_js_uses_family_normalizer(tmp_path: Path) -> None
     assert parsed.source.metadata["family_normalizer"] == "twitter-ytd-js"
     assert parsed.source.metadata["family_normalizer_kind"] == "account"
     assert "username: JustMicrock" in parsed.text
-    assert "email: gkievfx@gmail.com" in parsed.text
+    assert "email: archive-owner@example.com" in parsed.text
+
+
+def test_parse_remote_media_url_skips_enrichment_when_summarize_missing(tmp_path: Path) -> None:
+    note_path = tmp_path / "notes.md"
+    note_path.write_text("watch later https://youtu.be/example and revisit the packaging flow")
+    config = TracciaConfig.model_validate(
+        {
+            "multimodal": {
+                "remote_media_enrichment_command": str(tmp_path / "missing-summarize"),
+            }
+        }
+    )
+
+    parsed = parse_document(
+        note_path,
+        project_relative_path=Path("exports/notes.md"),
+        config=config,
+    )
+
+    assert parsed.source.metadata["remote_media_reference_count"] == 1
+    assert len(parsed.attachments) == 1
+    assert parsed.attachments[0].reference == "https://youtu.be/example"
+    assert parsed.attachments[0].extracted_text is None
 
 
 def test_parse_reddit_export_csv_uses_family_normalizer(tmp_path: Path) -> None:
@@ -141,11 +166,164 @@ def test_parse_reddit_export_csv_uses_family_normalizer(tmp_path: Path) -> None:
     assert "benchmarked OCR tools" in parsed.text
 
 
+def test_parse_google_takeout_youtube_csv_uses_family_normalizer(tmp_path: Path) -> None:
+    export_path = tmp_path / "suscripciones.csv"
+    export_path.write_text(
+        (
+            "ID del canal,URL del canal,Título del canal\n"
+            "UC123,http://www.youtube.com/channel/UC123,Disrupt\n"
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path("Takeout/YouTube y YouTube Music/suscripciones/suscripciones.csv"),
+        source_family=SourceFamily.GOOGLE_TAKEOUT,
+        source_family_subproduct="youtube-and-youtube-music",
+    )
+
+    assert parsed.source.parser == "google-takeout-csv"
+    assert parsed.source.source_category == SourceCategory.PLATFORM_EXPORT_ACTIVITY
+    assert parsed.source.metadata["family_normalizer"] == "google-takeout-csv"
+    assert parsed.source.metadata["family_normalizer_record_count"] == 1
+    assert "channel: Disrupt" in parsed.text
+    assert len(parsed.attachments) == 1
+    assert parsed.attachments[0].reference == "http://www.youtube.com/channel/UC123"
+
+
+def test_parse_google_takeout_profile_json_uses_family_normalizer(tmp_path: Path) -> None:
+    export_path = tmp_path / "Perfil.json"
+    export_path.write_text(
+        json.dumps(
+            {
+                "name": {
+                    "givenName": "Microck",
+                    "formattedName": "Microck",
+                },
+                "displayName": "Microck",
+                "emails": [{"value": "profile-owner@example.com"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path("Takeout/Perfil/Perfil.json"),
+        source_family=SourceFamily.GOOGLE_TAKEOUT,
+        source_family_subproduct="profile",
+    )
+
+    assert parsed.source.parser == "google-takeout-json"
+    assert parsed.source.metadata["family_normalizer"] == "google-takeout-json"
+    assert "displayName: Microck" in parsed.text
+    assert "emails.value: profile-owner@example.com" in parsed.text
+
+
+def test_parse_google_takeout_calendar_ics_uses_family_normalizer(tmp_path: Path) -> None:
+    export_path = tmp_path / "calendar.ics"
+    export_path.write_text(
+        "\n".join(
+            [
+                "BEGIN:VCALENDAR",
+                "BEGIN:VEVENT",
+                "DTSTART:20230408T100000Z",
+                "DTEND:20230408T130000Z",
+                "SUMMARY:Comida con Jimbo",
+                "DESCRIPTION:Lunch",
+                "END:VEVENT",
+                "END:VCALENDAR",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path("Takeout/Calendar/calendar-owner@example.com.ics"),
+        source_family=SourceFamily.GOOGLE_TAKEOUT,
+        source_family_subproduct="calendar",
+    )
+
+    assert parsed.source.source_type == SourceType.CALENDAR
+    assert parsed.source.parser == "google-takeout-calendar"
+    assert parsed.source.metadata["family_normalizer"] == "google-takeout-calendar"
+    assert "summary: Comida con Jimbo" in parsed.text
+
+
+def test_parse_google_takeout_mbox_uses_family_normalizer(tmp_path: Path) -> None:
+    export_path = tmp_path / "all-mail.mbox"
+    mbox = mailbox.mbox(export_path)
+    message = mailbox.mboxMessage()
+    message["From"] = "microck@example.com"
+    message["To"] = "friend@example.com"
+    message["Date"] = "Mon, 10 Nov 2025 17:01:52 +0100"
+    message["Subject"] = "CCPA DELETE"
+    message.set_payload("Please delete my data.")
+    mbox.add(message)
+    mbox.flush()
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path("Takeout/Correo/Todo el correo, incluido Spam y Papelera.mbox"),
+        source_family=SourceFamily.GOOGLE_TAKEOUT,
+        source_family_subproduct="mail",
+    )
+
+    assert parsed.source.parser == "google-takeout-mbox"
+    assert parsed.source.metadata["family_normalizer"] == "google-takeout-mbox"
+    assert parsed.source.metadata["family_normalizer_record_count"] == 1
+    assert "subject: CCPA DELETE" in parsed.text
+    assert "Please delete my data." in parsed.text
+
+
 def test_ingestable_file_skips_known_binary_media_extensions(tmp_path: Path) -> None:
     image_path = tmp_path / "photo.webp"
     image_path.write_bytes(b"RIFFxxxxWEBPVP8 " + (b"\x00" * 32))
 
     assert ingestable_file(image_path) is False
+
+
+def test_ingestable_file_skips_large_extensionless_files_without_content_sniff(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    media_path = tmp_path / "1913559960169918466-1913559960169918466"
+    with media_path.open("wb") as handle:
+        handle.seek(1024 * 1024 + 1)
+        handle.write(b"\x00")
+
+    original_open = Path.open
+
+    def fail_if_media_opened(self: Path, *args, **kwargs):
+        if self == media_path:
+            raise AssertionError("large extensionless files should not be opened for text sniffing")
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_if_media_opened)
+
+    assert ingestable_file(media_path) is False
+
+
+def test_ingestable_file_accepts_google_ai_studio_extensionless_exports_without_sniff(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    export_path = tmp_path / "Takeout" / "Drive" / "Google AI Studio" / "Configurar Disco"
+    export_path.parent.mkdir(parents=True)
+    export_path.write_text("I configured disk partitions.\n")
+
+    original_open = Path.open
+
+    def fail_if_export_opened(self: Path, *args, **kwargs):
+        if self == export_path:
+            raise AssertionError("extensionless Google AI Studio exports should not be sniffed")
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_if_export_opened)
+
+    assert ingestable_file(export_path) is True
 
 
 def test_parse_docx_uses_native_document_normalizer_when_requested(tmp_path: Path) -> None:
@@ -172,6 +350,28 @@ def test_parse_docx_uses_native_document_normalizer_when_requested(tmp_path: Pat
     assert parsed.source.metadata["document_normalizer"] == "native"
     assert parsed.source.metadata["document_ocr_used"] is False
     assert "I built a parser." in parsed.text
+
+
+def test_parse_xlsx_workbook_as_authored_spreadsheet(tmp_path: Path) -> None:
+    document_path = tmp_path / "checklist.xlsx"
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Build"
+    worksheet.append(["Task", "Status"])
+    worksheet.append(["Flash keyboard firmware", "done"])
+    worksheet.append(["Tune stabilizers", "done"])
+    workbook.save(document_path)
+
+    parsed = parse_document(
+        document_path,
+        project_relative_path=Path("Takeout/Drive/checklist.xlsx"),
+    )
+
+    assert parsed.source.source_type == SourceType.SPREADSHEET
+    assert parsed.source.source_category == SourceCategory.AUTHORED_CONTENT
+    assert parsed.source.parser == "xlsx"
+    assert "# Sheet: Build" in parsed.text
+    assert "Flash keyboard firmware | done" in parsed.text
 
 
 def test_parse_docx_auto_prefers_docling_when_available(tmp_path: Path, monkeypatch) -> None:
@@ -507,3 +707,87 @@ def test_parse_pdf_marker_can_be_disabled_explicitly(tmp_path: Path, monkeypatch
     assert parsed.source.parser == "docling"
     assert parsed.source.metadata["document_ocr_provider"] == "none"
     assert parsed.text == "Docling only"
+
+def test_parse_html_attachment_transcribes_local_video_when_tools_are_available(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    export_path = tmp_path / "post.html"
+    video_path = tmp_path / "clip.mp4"
+    export_path.write_text(
+        """
+        <html>
+          <body>
+            <p>I posted a build update.</p>
+            <video src="clip.mp4"></video>
+          </body>
+        </html>
+        """
+    )
+    video_path.write_bytes(b"fake-video")
+
+    def fake_which(command: str) -> str | None:
+        if command in {"ffmpeg", "whisper"}:
+            return f"/usr/bin/{command}"
+        return None
+
+    def fake_run(command, *, capture_output, text, timeout, check):
+        del capture_output, text, timeout, check
+        if command[0] == "ffmpeg":
+            Path(command[-1]).write_bytes(b"RIFFfake-audio")
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        if command[0] == "whisper":
+            audio_path = Path(command[1])
+            output_dir = Path(command[command.index("--output_dir") + 1])
+            (output_dir / f"{audio_path.stem}.json").write_text(
+                json.dumps({"text": "I built the parser and shipped the fix."})
+            )
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("traccia.parsers.shutil.which", fake_which)
+    monkeypatch.setattr("traccia.parsers.subprocess.run", fake_run)
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path("exports/post.html"),
+    )
+
+    assert len(parsed.attachments) == 1
+    attachment = parsed.attachments[0]
+    assert attachment.kind == AttachmentKind.VIDEO
+    assert attachment.extracted_text == "I built the parser and shipped the fix."
+    assert attachment.metadata["transcription_provider"] == "whisper_cli"
+    assert attachment.metadata["transcription_model"] == "turbo"
+
+def test_parse_html_attachment_can_disable_local_media_transcription(
+    tmp_path: Path,
+) -> None:
+    export_path = tmp_path / "post.html"
+    video_path = tmp_path / "clip.mp4"
+    export_path.write_text(
+        """
+        <html>
+          <body>
+            <video src="clip.mp4"></video>
+          </body>
+        </html>
+        """
+    )
+    video_path.write_bytes(b"fake-video")
+    config = TracciaConfig.model_validate(
+        {
+            "multimodal": {
+                "enable_local_media_transcription": False,
+            }
+        }
+    )
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path("exports/post.html"),
+        config=config,
+    )
+
+    assert len(parsed.attachments) == 1
+    assert parsed.attachments[0].extracted_text is None

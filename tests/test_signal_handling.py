@@ -6,7 +6,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from traccia.cli import app
-from traccia.config import load_config, write_config
+from traccia.config import TracciaConfig, load_config, write_config
 from traccia.parsers import parse_document
 from traccia.storage import Storage
 
@@ -132,9 +132,18 @@ def test_parse_document_normalizes_google_activity_json_exports(tmp_path: Path) 
         )
     )
 
+    config = TracciaConfig.model_validate(
+        {
+            "multimodal": {
+                "enable_remote_media_enrichment": False,
+            }
+        }
+    )
+
     document = parse_document(
         google_export,
         project_relative_path=Path("exports/google-activity.json"),
+        config=config,
     )
 
     assert document.source.source_category.value == "platform_export_activity"
@@ -143,6 +152,54 @@ def test_parse_document_normalizes_google_activity_json_exports(tmp_path: Path) 
     assert len(document.spans) == 2
     assert "CNC machining tolerances" in document.text
     assert "youtube.com" in document.text.lower()
+
+
+def test_parse_google_activity_attaches_remote_youtube_transcript(tmp_path: Path) -> None:
+    google_export = tmp_path / "google-activity.json"
+    google_export.write_text(
+        json.dumps(
+            [
+                {
+                    "header": "YouTube",
+                    "title": "Watched Python packaging tutorial",
+                    "titleUrl": "https://www.youtube.com/watch?v=example",
+                    "time": "2025-03-05T08:00:00Z",
+                }
+            ]
+        )
+    )
+    summarize_path = tmp_path / "summarize"
+    summarize_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "print('00:00 Packaging metadata basics\\n01:20 Built a Python wheel and published it')",
+            ]
+        )
+    )
+    summarize_path.chmod(0o755)
+    config = TracciaConfig.model_validate(
+        {
+            "multimodal": {
+                "remote_media_enrichment_command": str(summarize_path),
+            }
+        }
+    )
+
+    document = parse_document(
+        google_export,
+        project_relative_path=Path("exports/google-activity.json"),
+        config=config,
+    )
+
+    assert document.source.metadata["remote_media_reference_count"] == 1
+    assert len(document.attachments) == 1
+    attachment = document.attachments[0]
+    assert attachment.kind.value == "video"
+    assert attachment.reference == "https://www.youtube.com/watch?v=example"
+    assert "Built a Python wheel and published it" in (attachment.extracted_text or "")
+    assert attachment.metadata["url_enrichment_provider"] == "summarize_cli"
+    assert attachment.metadata["url_enrichment_command"] == "summarize"
 
 
 def test_self_presentation_profile_does_not_auto_create_skill(tmp_path: Path) -> None:
