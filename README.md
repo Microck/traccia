@@ -63,6 +63,10 @@ traccia export debug-report --project-root my-traccia
 traccia viewer --project-root my-traccia
 ```
 
+`traccia viewer` prints the `file://` URI for the generated static viewer. It does not
+start a web server; regenerate the viewer with `traccia render` or any ingest command
+that refreshes projections.
+
 for deterministic local testing, switch the generated config to:
 
 ```yaml
@@ -310,6 +314,7 @@ the full command list lives behind `traccia --help`, but the current working sur
 | `traccia review` | process uncertain graph changes |
 | `traccia alias` | manage canonical aliases |
 | `traccia export ...` | write graph, profile, markdown, and obsidian projections |
+| `traccia viewer` | print the generated static viewer URI |
 
 ## repo map
 

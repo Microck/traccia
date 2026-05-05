@@ -1,4 +1,4 @@
-"""Phase 0 bootstrap package for the Traccia CLI."""
+"""Public package metadata for the Traccia CLI and ingest pipeline."""
 
 __all__ = ["__version__"]
 

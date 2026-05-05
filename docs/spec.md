@@ -673,6 +673,10 @@ traccia reingest <source-id>
 traccia watch <path>
 ```
 
+`add` and `add-dir` are raw intake commands: they copy files into `raw/imported/`
+without extraction. Use `ingest` or `ingest-dir` when the desired outcome is parsed
+material, evidence extraction, graph refresh, and rendered projections.
+
 ### 20.3 Build/update
 ```bash
 traccia ingest <path>
@@ -691,6 +695,9 @@ traccia why <skill-id>
 traccia evidence <skill-id>
 traccia viewer
 ```
+
+`viewer` prints the generated `viewer/index.html` file URI. It is intentionally a
+static-bundle pointer, not a long-running web server command.
 
 ### 20.5 Review
 ```bash
