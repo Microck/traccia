@@ -137,11 +137,6 @@ TEXT_READ_ENCODINGS = (
 MAX_UNKNOWN_EXTENSION_TEXT_SNIFF_BYTES = 768 * 1024
 
 
-@dataclass(slots=True)
-class SourceMaterial:
-    path: Path
-    relative_import_path: Path
-
 
 @dataclass(slots=True)
 class ParsedSourceContent:

@@ -5,6 +5,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   id-token: write
@@ -12,6 +16,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -50,6 +55,7 @@ jobs:
 
   github-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: build
 
     steps:
@@ -68,6 +74,7 @@ jobs:
   publish-npm:
     if: vars.NPM_PUBLISH == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: build
 
     steps:
@@ -91,6 +98,7 @@ jobs:
   publish-pypi:
     if: vars.PYPI_PUBLISH == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: build
     environment:
       name: pypi

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,10 +108,6 @@ SKILLS: tuple[SkillDefinition, ...] = (
 DOMAIN_BY_NAME = {domain.name: domain for domain in DOMAINS}
 SKILL_BY_NAME = {skill.name: skill for skill in SKILLS}
 
-
-@dataclass(slots=True)
-class MatchResult:
-    names: set[str] = field(default_factory=set)
 
 
 def match_skill_names(text: str) -> list[str]:

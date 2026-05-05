@@ -143,11 +143,6 @@ class PersonSkillStatus(StrEnum):
     MANUAL = "manual"
 
 
-class ClaimOrigin(StrEnum):
-    OBSERVED = "observed"
-    INFERRED = "inferred"
-    MANUAL = "manual"
-
 
 class SignalClass(StrEnum):
     AMBIENT_INTEREST = "ambient_interest"
@@ -263,16 +258,6 @@ class PersonSkillState(TracciaModel):
     locked: bool = False
     manual_note: str | None = None
 
-
-class Claim(TracciaModel):
-    claim_id: str
-    claim_type: str
-    subject: str
-    predicate: str
-    object: str
-    evidence_ids: list[str] = Field(default_factory=list)
-    confidence: float = Field(ge=0.0, le=1.0)
-    origin: ClaimOrigin
 
 
 class ReviewItem(TracciaModel):
