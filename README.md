@@ -318,6 +318,8 @@ the full command list lives behind `traccia --help`, but the current working sur
 | `docs/spec.md` | product and architecture spec |
 | `docs/plan.md` | implementation plan and phase boundaries |
 | `docs/decisions.md` | decisions and research conclusions |
+| `docs/ingest-architecture.md` | source-family ingest, checkpoint, and graph-refresh contract |
+| `docs/architecture-notes.md` | scoring, persistence, and high-risk module notes |
 | `docs/references.md` | inspirations and anti-references |
 | `src/traccia/` | implementation |
 | `tests/` | fixtures and regression coverage |

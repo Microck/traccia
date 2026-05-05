@@ -131,14 +131,17 @@ def normalize_family_content(
     if not source_family or source_family == SourceFamily.GENERIC:
         return None
 
-    if source_type == SourceType.TEXT and path.suffix.lower() in {".html", ".htm"}:
-        if source_family in _HTML_EXPORT_FAMILIES:
-            return _normalize_export_html(
-                path=path,
-                project_relative_path=project_relative_path,
-                source_family=source_family,
-                source_family_subproduct=source_family_subproduct,
-            )
+    if (
+        source_type == SourceType.TEXT
+        and path.suffix.lower() in {".html", ".htm"}
+        and source_family in _HTML_EXPORT_FAMILIES
+    ):
+        return _normalize_export_html(
+            path=path,
+            project_relative_path=project_relative_path,
+            source_family=source_family,
+            source_family_subproduct=source_family_subproduct,
+        )
 
     if source_family == SourceFamily.TWITTER_ARCHIVE and path.suffix.lower() == ".js":
         return _normalize_twitter_archive_js(

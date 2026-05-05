@@ -269,6 +269,7 @@ Fields:
 - `source_id`
 - `uri`
 - `source_type`
+- `source_category`
 - `parser`
 - `sha256`
 - `created_at`
@@ -289,11 +290,13 @@ Fields:
 - `span_end`
 - `quote`
 - `evidence_type`
+- `signal_class`
 - `skill_candidates`
 - `artifact_candidates`
 - `time_reference`
 - `reliability`
 - `extractor_version`
+- `confidence`
 
 ### 9.3 SkillNode
 Represents a skill, topic, tool, method, or capability.
@@ -347,17 +350,24 @@ Fields:
 - `artifact_score`
 - `teaching_score`
 - `first_seen_at`
+- `first_learned_at`
 - `first_strong_evidence_at`
 - `last_evidence_at`
 - `last_strong_evidence_at`
 - `historical_peak_level`
 - `historical_peak_at`
+- `acquired_at`
+- `acquisition_basis`
+- `freshness`
 - `status`
 - `locked`
 - `manual_note`
 
 ### 9.6 Claim
-Explicit assertions emitted by the extraction pipeline.
+Explicit assertions that may be emitted by a future extraction path.
+
+Current implementation note: `claims` exists in the logical schema as a planned contract, but the
+v1 pipeline writes skill evidence and review items rather than first-class claim rows.
 
 Fields:
 - `claim_id`
@@ -715,9 +725,11 @@ traccia/
     config.yaml
     prompts/
       extract_evidence.md
-      canonicalize.md
-      assess_skill.md
-      render_node.md
+      canonicalize_skills.md
+      score_skill_state.md
+      render_node_page.md
+      render_tree_index.md
+      profile_summary.md
   raw/
     inbox/
     imported/
@@ -728,7 +740,6 @@ traccia/
   graph/
     graph.json
     tree.json
-    aliases.json
   viewer/
   tree/
     index.md
@@ -742,6 +753,8 @@ traccia/
   state/
     catalog.sqlite
     manifests/
+    ingest-runs/
+    progress.json
     review_queue.jsonl
   exports/
 ```
@@ -758,7 +771,8 @@ Tables:
 - `person_skill_states`
 - `claims`
 - `review_queue`
-- `pipeline_runs`
+- `extraction_checkpoints`
+- `graph_candidate_cache`
 - `manual_overrides`
 
 ## 23. Node page format
@@ -852,14 +866,13 @@ Recommended default stack:
 - Python 3.12
 - Typer for CLI
 - SQLite for state
-- DuckDB optional for analytics
 - Pydantic for schemas
-- NetworkX for graph operations
-- tree-sitter / pygments / git for code evidence
-- unstructured / pypdf / python-docx / markdown-it for parsers
+- pypdf and python-docx for native document fallbacks
+- optional marker, docling, and markitdown for richer local markdown conversion
+- optional local tools such as tesseract, ffmpeg, whisper, and summarize for media enrichment
 - sentence-transformers or API embeddings for alias matching
 - optional local model via Ollama
-- optional frontend via FastAPI + static JS
+- static JS for the generated local viewer bundle
 
 Why Python:
 - strongest parsing ecosystem

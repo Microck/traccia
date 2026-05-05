@@ -183,15 +183,19 @@ The strongest current recommendation is:
 - treat `swarmvault` as the richest donor for provenance, approvals, and graph/report patterns
 - treat graph viewers as separate reference material, not as a product foundation
 
-## 8. Unresolved calibration questions
+## 8. Calibration defaults
 
-These were intentionally left open for later calibration against a golden corpus rather than guessed in prose:
+These defaults are intentionally conservative until a golden corpus exists. They are configurable
+where the implementation already exposes config, and should be treated as v1 defaults rather than
+universal claims about skill measurement.
 
-- exact confidence threshold for strong-evidence auto-creation
-- recency decay curve
-- source reliability weights
-- exact auxiliary facet vocabulary for lightly modeled non-skill context
-- whether `topic` and `skill` remain distinct in the UI or only in storage
+- Strong-evidence auto-create threshold: `thresholds.strong_evidence_auto_create = 0.85`.
+- Review floor: `thresholds.review_confidence_floor = 0.6`.
+- Consumption-only ceiling: `thresholds.consumption_max_level = 2`; weak or ambient evidence may show awareness and interest, but it cannot independently imply demonstrated competence.
+- Recency score is currently stepwise: 0-90 days => `1.0` / `active`, 91-180 days => `0.7` / `warming`, 181-365 days => `0.4` / `stale`, older => `0.15` / `historical`.
+- Source reliability is encoded through `SourceCategory`, `EvidenceType`, `SignalClass`, and the support-score tables. Artifact-backed implementation/debug/design evidence receives the strongest weight; platform activity, metadata-only traces, self-presentation, and ambient interest receive the weakest weight.
+- Auxiliary non-skill context remains source/evidence metadata in v1. It is not promoted to scored graph nodes.
+- `topic` and `skill` remain distinct in storage through `SkillKind`. The current UI may render them together when that is simpler, but graph exports preserve the distinction.
 
 ## 9. Summary
 

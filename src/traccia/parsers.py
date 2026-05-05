@@ -171,7 +171,11 @@ def detect_source_type(path: Path) -> SourceType:
         return SourceType.TEXT
     if sniff_text_file(path):
         return SourceType.TEXT
-    raise ValueError(f"Unsupported source type for path: {path}")
+    supported_suffixes = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+    raise ValueError(
+        f"Unsupported source type for {path}. "
+        f"Supported suffixes: {supported_suffixes}; extensionless text exports are sniffed when safe."
+    )
 
 
 def _looks_like_extensionless_text_export(path: Path) -> bool:
@@ -397,7 +401,10 @@ def _read_text(path: Path, source_type: SourceType) -> str:
         return "\n".join(rows)
     if source_type == SourceType.SPREADSHEET:
         return _read_spreadsheet_text(path)
-    raise ValueError(f"Unsupported source type: {source_type}")
+    supported_types = ", ".join(item.value for item in SourceType)
+    raise ValueError(
+        f"Unsupported source type {source_type!r} for {path}. Supported source types: {supported_types}."
+    )
 
 
 def _read_spreadsheet_text(path: Path) -> str:
@@ -553,18 +560,24 @@ def _parse_structured_json_source(
 
 
 def _looks_like_ai_conversation_export(*, payload: object, lowered_path: str, filename: str) -> bool:
-    if any(token in lowered_path or token in filename for token in ("chatgpt", "claude", "gemini", "assistant", "conversation")):
-        if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
-            return True
+    if (
+        any(token in lowered_path or token in filename for token in ("chatgpt", "claude", "gemini", "assistant", "conversation"))
+        and isinstance(payload, dict)
+        and isinstance(payload.get("messages"), list)
+    ):
+        return True
     if isinstance(payload, dict) and isinstance(payload.get("messages"), list):
         return any(_coerce_message_text(message.get("content")) for message in payload["messages"] if isinstance(message, dict))
     return False
 
 
 def _looks_like_reddit_export(*, payload: object, lowered_path: str, filename: str) -> bool:
-    if any(token in lowered_path or token in filename for token in ("reddit", "subreddit")):
-        if isinstance(payload, dict) and any(isinstance(payload.get(key), list) for key in ("posts", "comments")):
-            return True
+    if (
+        any(token in lowered_path or token in filename for token in ("reddit", "subreddit"))
+        and isinstance(payload, dict)
+        and any(isinstance(payload.get(key), list) for key in ("posts", "comments"))
+    ):
+        return True
     if not isinstance(payload, dict):
         return False
     posts = payload.get("posts")
@@ -578,9 +591,11 @@ def _looks_like_reddit_export(*, payload: object, lowered_path: str, filename: s
 
 
 def _looks_like_google_activity_export(*, payload: object, lowered_path: str, filename: str) -> bool:
-    if any(token in lowered_path or token in filename for token in ("google", "takeout", "activity", "search-history")):
-        if isinstance(payload, list):
-            return any(isinstance(item, dict) and (item.get("header") or item.get("titleUrl")) for item in payload)
+    if (
+        any(token in lowered_path or token in filename for token in ("google", "takeout", "activity", "search-history"))
+        and isinstance(payload, list)
+    ):
+        return any(isinstance(item, dict) and (item.get("header") or item.get("titleUrl")) for item in payload)
     return isinstance(payload, list) and any(
         isinstance(item, dict) and item.get("time") and (item.get("header") or item.get("titleUrl"))
         for item in payload
@@ -589,10 +604,12 @@ def _looks_like_google_activity_export(*, payload: object, lowered_path: str, fi
 
 def _parse_ai_conversation_export(*, payload: object, source_id: str) -> ParsedSourceContent:
     if not isinstance(payload, dict):
-        raise ValueError("AI conversation payload must be an object")
+        raise ValueError(
+            f"AI conversation payload for {source_id} must be an object, got {type(payload).__name__}."
+        )
     messages = payload.get("messages")
     if not isinstance(messages, list):
-        raise ValueError("AI conversation payload must contain a messages list")
+        raise ValueError(f"AI conversation payload for {source_id} must contain a messages list.")
 
     entries: list[dict[str, str]] = []
     timestamps: list[datetime] = []
@@ -1182,6 +1199,7 @@ def _extract_image_text(path: Path, *, max_characters: int, timeout_seconds: int
         return None
     return normalized[:max_characters]
 
+
 def _extract_media_text(
     path: Path,
     *,
@@ -1291,6 +1309,7 @@ def _extract_remote_media_text(
         },
     )
 
+
 def _resolve_media_transcription_provider(provider: str) -> str | None:
     normalized = provider.strip().lower()
     if normalized in {"none", "disabled"}:
@@ -1300,6 +1319,7 @@ def _resolve_media_transcription_provider(provider: str) -> str | None:
     if normalized in {"whisper", "whisper_cli"}:
         return "whisper_cli"
     raise ValueError(f"Unsupported multimodal.audio_transcription_provider: {provider}")
+
 
 def _normalize_media_audio(
     *,
@@ -1337,6 +1357,7 @@ def _normalize_media_audio(
     except (FileNotFoundError, subprocess.SubprocessError, TimeoutError):
         return False
     return completed.returncode == 0 and output_path.exists()
+
 
 def _transcribe_audio_with_whisper(
     audio_path: Path,

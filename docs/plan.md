@@ -259,15 +259,15 @@ Expected outputs:
 ### 7.5 Review tests
 - ambiguous aliases should land in review queue
 
-## 8. Open questions to settle early
+## 8. Calibration defaults chosen for v1
 
-1. Should `topic` and `skill` remain distinct in the UI, or only in storage?
-2. What exact confidence threshold should trigger strong-evidence auto-creation of a new node?
-3. How aggressive should recency decay be?
-4. Which source types deserve the strongest reliability weights?
-5. Which auxiliary facet vocabulary should be supported for lightly modeled non-skill context?
+1. `topic` and `skill` remain distinct in storage through `SkillKind`; renderers can group them visually when useful.
+2. Strong-evidence auto-creation defaults to confidence `0.85`.
+3. Recency uses a conservative step curve: active through 90 days, warming through 180 days, stale through 365 days, historical after that.
+4. The strongest source weight belongs to shipped artifacts, code, authored docs, and concrete execution traces. Weak social, metadata, search, and self-presentation traces stay low weight.
+5. Auxiliary non-skill context remains source/evidence metadata in v1 instead of becoming first-class graph nodes.
 
-Make these configurable, but choose defaults early so the system behaves consistently.
+These defaults should be recalibrated against a golden corpus rather than tuned by anecdote.
 
 ## 9. Recommended prompt inventory
 
@@ -280,9 +280,10 @@ Make these configurable, but choose defaults early so the system behaves consist
 
 Keep them small and role-specific.
 
-## 10. Suggested first demo corpus
+## 10. Optional demo corpus
 
-Use a single person's data bundle with:
+The repository does not ship a personal demo corpus because realistic examples would be private.
+For local demos, use a synthetic or consented single-person data bundle with:
 - one repo
 - one project design doc
 - one talk or presentation

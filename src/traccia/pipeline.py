@@ -9,11 +9,10 @@ import time
 import unicodedata
 import zipfile
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator
 
 from traccia.config import load_config
 from traccia.llm import (
@@ -94,9 +93,7 @@ LOW_SIGNAL_TWITTER_SUBPRODUCTS = {
     "following",
 }
 
-LOW_SIGNAL_TWITTER_PATH_MARKERS = (
-    "/assets/",
-)
+LOW_SIGNAL_TWITTER_PATH_MARKERS = ("/assets/",)
 
 LOW_SIGNAL_TWITTER_FILENAMES = {
     "account-creation-ip.js",
@@ -215,9 +212,7 @@ LOW_SIGNAL_GOOGLE_TAKEOUT_FILENAMES = {
     "archive_browser.html",
 }
 
-LOW_SIGNAL_GOOGLE_TAKEOUT_PREFIXES = (
-    "weakpass_",
-)
+LOW_SIGNAL_GOOGLE_TAKEOUT_PREFIXES = ("weakpass_",)
 
 GOOGLE_TAKEOUT_DRIVE_ARCHIVE_SUFFIXES = {
     ".7z",
@@ -246,9 +241,7 @@ LOW_SIGNAL_DIRECTORY_NAMES = {
     "world",
 }
 
-LOW_SIGNAL_DIRECTORY_PREFIXES = (
-    "python-",
-)
+LOW_SIGNAL_DIRECTORY_PREFIXES = ("python-",)
 
 LOW_SIGNAL_FILE_SUFFIXES = {
     ".bak",
@@ -267,6 +260,7 @@ class BatchResult:
     imported: int = 0
     deleted: int = 0
     failed: int = 0
+
 
 @dataclass(slots=True)
 class DiscoverySummary:
@@ -334,7 +328,9 @@ class Pipeline:
         materials = self._discover_materials(root)
         return self._summarize_materials(materials)
 
-    def ingest_file(self, path: Path, *, root: Path | None = None, force: bool = False) -> tuple[str, bool]:
+    def ingest_file(
+        self, path: Path, *, root: Path | None = None, force: bool = False
+    ) -> tuple[str, bool]:
         materials = self._materials_for_path(path=path, root=root or path.parent)
         if not materials:
             raise ValueError(f"No ingestable material found in {path}")
@@ -353,12 +349,14 @@ class Pipeline:
                     source_path=_absolute_path_text(material.source_path),
                     archive_member=material.archive_member,
                     source_family=material.source_family,
-                source_family_subproduct=material.source_family_subproduct,
-                detection_reason=material.detection_reason,
-                status=IngestMaterialStatus.PROCESSED if processed else IngestMaterialStatus.SKIPPED,
-                source_id=source_id,
-                source_sha256=self.storage.fetch_source(source_id)["sha256"],
-            )
+                    source_family_subproduct=material.source_family_subproduct,
+                    detection_reason=material.detection_reason,
+                    status=IngestMaterialStatus.PROCESSED
+                    if processed
+                    else IngestMaterialStatus.SKIPPED,
+                    source_id=source_id,
+                    source_sha256=self.storage.fetch_source(source_id)["sha256"],
+                )
             )
         self._write_ingest_manifest(root=root or path.parent, entries=manifest_entries)
         fallback_source_id = source_id_for_relative_path(
@@ -377,17 +375,22 @@ class Pipeline:
             result=result,
             discovery=DiscoverySummary(),
             total_materials=None,
-            resume_completed=_resume_completed_count(previous_run_state.materials) if previous_run_state else 0,
+            resume_completed=_resume_completed_count(previous_run_state.materials)
+            if previous_run_state
+            else 0,
         )
 
         last_discovery_log_count = 0
 
-        def on_discovery_progress(summary: DiscoverySummary, material: ImportMaterial | None) -> None:
+        def on_discovery_progress(
+            summary: DiscoverySummary, material: ImportMaterial | None
+        ) -> None:
             nonlocal last_discovery_log_count
             if (
                 material
                 and summary.total_materials
-                and summary.total_materials - last_discovery_log_count >= DISCOVERY_LOG_EVERY_MATERIALS
+                and summary.total_materials - last_discovery_log_count
+                >= DISCOVERY_LOG_EVERY_MATERIALS
             ):
                 self._append_log(
                     " ".join(
@@ -417,16 +420,18 @@ class Pipeline:
         if cached_materials is not None:
             current_materials = cached_materials
             self._append_log(
-                (
-                    f"- {iso_now()}: ingest-discovery-cache-reused "
-                    f"root={root.resolve()} materials={len(current_materials)}"
-                )
+                f"- {iso_now()}: ingest-discovery-cache-reused "
+                f"root={root.resolve()} materials={len(current_materials)}"
             )
-            on_discovery_progress(self._summarize_materials(current_materials), current_materials[-1])
+            on_discovery_progress(
+                self._summarize_materials(current_materials), current_materials[-1]
+            )
         else:
             current_materials = self._discover_materials(root, on_progress=on_discovery_progress)
         discovery = self._summarize_materials(current_materials)
-        if self._should_block_empty_root(root=root, current_materials=current_materials, previous_run_state=previous_run_state):
+        if self._should_block_empty_root(
+            root=root, current_materials=current_materials, previous_run_state=previous_run_state
+        ):
             reason = (
                 "Source root appears empty after a previously substantial ingest. "
                 "This usually means the source mount or upstream directory is unavailable."
@@ -460,14 +465,12 @@ class Pipeline:
         resume_revalidated = 0
 
         self._append_log(
-            (
-                f"- {iso_now()}: ingest-discovered root={root.resolve()} "
-                f"materials={discovery.total_materials} direct_files={discovery.direct_files} "
-                f"archive_members={discovery.archive_members} "
-                f"by_root={_format_counts(discovery.by_root)} "
-                f"by_family={_format_counts(discovery.by_family)} "
-                f"by_family_subproduct={_format_counts(discovery.by_family_subproduct)}"
-            )
+            f"- {iso_now()}: ingest-discovered root={root.resolve()} "
+            f"materials={discovery.total_materials} direct_files={discovery.direct_files} "
+            f"archive_members={discovery.archive_members} "
+            f"by_root={_format_counts(discovery.by_root)} "
+            f"by_family={_format_counts(discovery.by_family)} "
+            f"by_family_subproduct={_format_counts(discovery.by_family_subproduct)}"
         )
         self._write_progress(
             status="running",
@@ -562,7 +565,9 @@ class Pipeline:
                 backend_failure = _backend_failure_reason(exc)
                 source_unavailable = _source_unavailable_reason(exc)
                 blocking_failure = backend_failure or source_unavailable
-                consecutive_backend_failures = consecutive_backend_failures + 1 if blocking_failure else 0
+                consecutive_backend_failures = (
+                    consecutive_backend_failures + 1 if blocking_failure else 0
+                )
                 self._append_log(
                     " ".join(
                         [
@@ -680,6 +685,7 @@ class Pipeline:
                 total_materials=total_materials,
                 checkpoint_count=live_graph_checkpoint_count,
             ):
+
                 def on_checkpoint_graph_progress(graph_progress: dict[str, object]) -> None:
                     self._write_progress(
                         status="running",
@@ -731,6 +737,7 @@ class Pipeline:
             resume_revalidated=resume_revalidated,
         )
         try:
+
             def on_final_graph_progress(graph_progress: dict[str, object]) -> None:
                 self._write_progress(
                     status="running",
@@ -793,11 +800,9 @@ class Pipeline:
             entries=list(manifest_entries.values()),
         )
         self._append_log(
-            (
-                f"- {iso_now()}: ingest-dir root={root.resolve()} imported={result.imported} "
-                f"processed={result.processed} skipped={result.skipped} failed={result.failed} "
-                f"deleted={result.deleted}"
-            )
+            f"- {iso_now()}: ingest-dir root={root.resolve()} imported={result.imported} "
+            f"processed={result.processed} skipped={result.skipped} failed={result.failed} "
+            f"deleted={result.deleted}"
         )
         self._write_progress(
             status="completed",
@@ -860,9 +865,7 @@ class Pipeline:
             if row["status"] != "pending"
         }
         existing_skill_rows = self.storage.list_skill_rows()
-        existing_skill_rows_by_id = {
-            str(row["skill_id"]): row for row in existing_skill_rows
-        }
+        existing_skill_rows_by_id = {str(row["skill_id"]): row for row in existing_skill_rows}
         previous_skill_rows = {
             str(row["skill_id"]): row for row in existing_skill_rows if row["kind"] != "domain"
         }
@@ -926,7 +929,10 @@ class Pipeline:
                     return
                 if checkpoint_count == 0 and has_non_domain_state:
                     pass
-                elif time.monotonic() - last_checkpoint_at < GRAPH_PROGRESSIVE_RENDER_MIN_INTERVAL_SECONDS:
+                elif (
+                    time.monotonic() - last_checkpoint_at
+                    < GRAPH_PROGRESSIVE_RENDER_MIN_INTERVAL_SECONDS
+                ):
                     return
             self.storage.replace_graph(
                 skills=sorted(
@@ -969,7 +975,9 @@ class Pipeline:
                 payload["confidence"] = score_payload.confidence
             progress_callback(payload)
 
-        for candidate_index, (candidate_name, candidate_support) in enumerate(sorted_support, start=1):
+        for candidate_index, (candidate_name, candidate_support) in enumerate(
+            sorted_support, start=1
+        ):
             candidate_evidence = list(candidate_support["evidence"])
             emit_graph_progress(
                 event="candidate-start",
@@ -1039,7 +1047,9 @@ class Pipeline:
                             item_id=item_id,
                             reason=decision.reason,
                             proposed_change={"type": "create_skill", "name": candidate_name},
-                            evidence_ids=[item.evidence_id for item in candidate_support["evidence"]],
+                            evidence_ids=[
+                                item.evidence_id for item in candidate_support["evidence"]
+                            ],
                             risk_level=ReviewRiskLevel(decision.review_risk_level),
                         )
                     )
@@ -1105,7 +1115,9 @@ class Pipeline:
                         request=ScoringRequest(
                             skill=skill,
                             evidence_items=merged_evidence,
-                            thresholds={"consumption_max_level": self.config.thresholds.consumption_max_level},
+                            thresholds={
+                                "consumption_max_level": self.config.thresholds.consumption_max_level
+                            },
                             locked=skill.skill_id in locked_skills,
                             hidden=skill.skill_id in hidden_skills,
                         ),
@@ -1262,10 +1274,8 @@ class Pipeline:
             )
         except Exception as exc:
             self._append_log(
-                (
-                    f"- {iso_now()}: graph-checkpoint-failed "
-                    f"completed={completed}/{total_materials} error={type(exc).__name__}:{exc}"
-                )
+                f"- {iso_now()}: graph-checkpoint-failed "
+                f"completed={completed}/{total_materials} error={type(exc).__name__}:{exc}"
             )
 
     def _sync_graph_outputs(
@@ -1283,7 +1293,9 @@ class Pipeline:
         render_project(self.project_root, storage=self.storage)
 
     def _discover_files(self, root: Path) -> list[Path]:
-        return [path for path in _iter_paths_sorted(root) if path.is_file() and ingestable_file(path)]
+        return [
+            path for path in _iter_paths_sorted(root) if path.is_file() and ingestable_file(path)
+        ]
 
     def _watch_roots(self, root: Path) -> list[Path]:
         return [
@@ -1389,10 +1401,13 @@ class Pipeline:
 
     def _sync_import_scope(self, *, root: Path, current_materials: list[ImportMaterial]) -> int:
         current_source_ids = {
-            source_id_for_relative_path(material.relative_import_path) for material in current_materials
+            source_id_for_relative_path(material.relative_import_path)
+            for material in current_materials
         }
         deleted = 0
-        scope_root = (self.project_root / "raw" / "imported" / slugify(root.name or "imported")).absolute()
+        scope_root = (
+            self.project_root / "raw" / "imported" / slugify(root.name or "imported")
+        ).absolute()
         for source_row in self.storage.list_sources():
             if source_row["status"] == "deleted":
                 continue
@@ -1400,7 +1415,9 @@ class Pipeline:
             relative_import_path = metadata.get("relative_import_path")
             if not isinstance(relative_import_path, str) or not relative_import_path:
                 continue
-            imported_path = (self.project_root / "raw" / "imported" / relative_import_path).absolute()
+            imported_path = (
+                self.project_root / "raw" / "imported" / relative_import_path
+            ).absolute()
             if not _path_within_scope(imported_path, scope_root):
                 continue
             if source_row["source_id"] in current_source_ids:
@@ -1420,7 +1437,10 @@ class Pipeline:
     ) -> bool:
         if current_materials:
             return False
-        if previous_run_state is None or previous_run_state.total_materials < EMPTY_ROOT_BLOCK_THRESHOLD:
+        if (
+            previous_run_state is None
+            or previous_run_state.total_materials < EMPTY_ROOT_BLOCK_THRESHOLD
+        ):
             return False
         try:
             next(root.iterdir())
@@ -1438,7 +1458,9 @@ class Pipeline:
         on_chunk_progress: Callable[[int, int], None] | None = None,
     ) -> tuple[str, bool]:
         imported_path = self._import_material(material)
-        parsed_document = self._parsed_document_for_material(material=material, imported_path=imported_path)
+        parsed_document = self._parsed_document_for_material(
+            material=material, imported_path=imported_path
+        )
         previous_source = self.storage.fetch_source(parsed_document.source.source_id)
         if (
             previous_source
@@ -1499,10 +1521,8 @@ class Pipeline:
         if skip_reason:
             self.storage.clear_extraction_checkpoints(parsed_document.source.source_id)
             self._append_log(
-                (
-                    f"- {iso_now()}: extraction-skipped source_id={parsed_document.source.source_id} "
-                    f"reason={skip_reason}"
-                )
+                f"- {iso_now()}: extraction-skipped source_id={parsed_document.source.source_id} "
+                f"reason={skip_reason}"
             )
             return []
 
@@ -1517,10 +1537,8 @@ class Pipeline:
 
         if completed_chunks:
             self._append_log(
-                (
-                    f"- {iso_now()}: extraction-resume source_id={parsed_document.source.source_id} "
-                    f"completed_chunks={len(completed_chunks)}/{len(chunks)}"
-                )
+                f"- {iso_now()}: extraction-resume source_id={parsed_document.source.source_id} "
+                f"completed_chunks={len(completed_chunks)}/{len(chunks)}"
             )
             if on_chunk_progress:
                 on_chunk_progress(len(completed_chunks), len(chunks))
@@ -1580,8 +1598,7 @@ class Pipeline:
                 self.storage.clear_extraction_checkpoints(source_id)
                 return {}
             resumed[chunk_index] = [
-                EvidenceItem.model_validate(item)
-                for item in json.loads(str(row["evidence_json"]))
+                EvidenceItem.model_validate(item) for item in json.loads(str(row["evidence_json"]))
             ]
         return resumed
 
@@ -1589,10 +1606,12 @@ class Pipeline:
         destination = self.project_root / "raw" / "imported" / material.relative_import_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         if material.archive_member:
-            with zipfile.ZipFile(material.source_path) as archive:
-                with archive.open(material.archive_member) as source_handle:
-                    with destination.open("wb") as destination_handle:
-                        shutil.copyfileobj(source_handle, destination_handle)
+            with (
+                zipfile.ZipFile(material.source_path) as archive,
+                archive.open(material.archive_member) as source_handle,
+                destination.open("wb") as destination_handle,
+            ):
+                shutil.copyfileobj(source_handle, destination_handle)
         else:
             target_path = _absolute_path_no_resolve(material.source_path)
             if not target_path.exists():
@@ -1609,7 +1628,9 @@ class Pipeline:
             destination.symlink_to(target_path)
         return destination
 
-    def _parsed_document_for_material(self, *, material: ImportMaterial, imported_path: Path) -> ParsedDocument:
+    def _parsed_document_for_material(
+        self, *, material: ImportMaterial, imported_path: Path
+    ) -> ParsedDocument:
         parsed_document = parse_document(
             imported_path,
             project_relative_path=material.relative_import_path,
@@ -1642,15 +1663,16 @@ class Pipeline:
         if archive_member:
             metadata["archive_member"] = archive_member
         return parsed_document.model_copy(
-            update={
-                "source": parsed_document.source.model_copy(
-                    update={"metadata": metadata}
-                )
-            }
+            update={"source": parsed_document.source.model_copy(update={"metadata": metadata})}
         )
 
     def _import_path_for(self, *, path: Path, root: Path) -> Path:
-        return self.project_root / "raw" / "imported" / self._relative_import_path_for(path=path, root=root)
+        return (
+            self.project_root
+            / "raw"
+            / "imported"
+            / self._relative_import_path_for(path=path, root=root)
+        )
 
     def _relative_import_path_for(self, *, path: Path, root: Path) -> Path:
         root_name = slugify(root.name or "imported")
@@ -1658,7 +1680,9 @@ class Pipeline:
 
     def _archive_relative_root(self, *, path: Path, root: Path) -> Path:
         archive_relative = path.relative_to(root)
-        return Path(slugify(root.name or "imported")) / archive_relative.parent / archive_relative.stem
+        return (
+            Path(slugify(root.name or "imported")) / archive_relative.parent / archive_relative.stem
+        )
 
     def _ingest_run_state_path(self, root: Path) -> Path:
         state_root = self.project_root / "state" / "ingest-runs"
@@ -1678,7 +1702,9 @@ class Pipeline:
             return None
         return state
 
-    def _resume_cached_materials(self, previous_run_state: IngestRunState | None) -> list[ImportMaterial] | None:
+    def _resume_cached_materials(
+        self, previous_run_state: IngestRunState | None
+    ) -> list[ImportMaterial] | None:
         if previous_run_state is None or not previous_run_state.materials:
             return None
         incomplete_statuses = {IngestMaterialStatus.DISCOVERED, IngestMaterialStatus.FAILED}
@@ -1694,7 +1720,9 @@ class Pipeline:
                 detection_reason=entry.detection_reason,
                 archive_member=entry.archive_member,
             )
-            if _skip_candidate_path_reason(material.relative_import_path) or _skip_material_reason(material):
+            if _skip_candidate_path_reason(material.relative_import_path) or _skip_material_reason(
+                material
+            ):
                 continue
             materials.append(material)
         if not materials:
@@ -1776,10 +1804,12 @@ class Pipeline:
         try:
             if material.archive_member:
                 digest = hashlib.sha256()
-                with zipfile.ZipFile(material.source_path) as archive:
-                    with archive.open(material.archive_member) as handle:
-                        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                            digest.update(chunk)
+                with (
+                    zipfile.ZipFile(material.source_path) as archive,
+                    archive.open(material.archive_member) as handle,
+                ):
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
                 return digest.hexdigest()
             return file_sha256(material.source_path)
         except (FileNotFoundError, KeyError, OSError, zipfile.BadZipFile):
@@ -1791,7 +1821,9 @@ class Pipeline:
     def _unsafe_archive_member(self, member_path: Path) -> bool:
         return member_path.is_absolute() or ".." in member_path.parts
 
-    def _ingestable_archive_member(self, *, archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bool:
+    def _ingestable_archive_member(
+        self, *, archive: zipfile.ZipFile, info: zipfile.ZipInfo
+    ) -> bool:
         member_path = Path(info.filename)
         if ingestable_file(member_path):
             return True
@@ -1881,7 +1913,10 @@ class Pipeline:
                 "deleted": result.deleted,
             },
             "progress": {
-                "completed": resume_completed + result.imported + result.failed - resume_revalidated,
+                "completed": resume_completed
+                + result.imported
+                + result.failed
+                - resume_revalidated,
                 "total": total_materials,
                 "current_index": current_index,
             },
@@ -1923,12 +1958,9 @@ def _chunk_document(document: ParsedDocument) -> list[ParsedDocument]:
 
     for span in _expand_oversized_spans(document.spans):
         span_length = len(span.text)
-        would_overflow = (
-            current_spans
-            and (
-                len(current_spans) >= MAX_EXTRACTION_SPANS
-                or current_characters + span_length > MAX_EXTRACTION_CHARACTERS
-            )
+        would_overflow = current_spans and (
+            len(current_spans) >= MAX_EXTRACTION_SPANS
+            or current_characters + span_length > MAX_EXTRACTION_CHARACTERS
         )
         if would_overflow:
             chunks.append(
@@ -2103,7 +2135,9 @@ def _chunk_fingerprint(document: ParsedDocument) -> str:
     return short_hash(json.dumps(payload, sort_keys=True), length=16)
 
 
-def _normalize_evidence_items(source_id: str, evidence_items: list[EvidenceItem]) -> list[EvidenceItem]:
+def _normalize_evidence_items(
+    source_id: str, evidence_items: list[EvidenceItem]
+) -> list[EvidenceItem]:
     normalized_by_id: dict[str, EvidenceItem] = {}
     for item in evidence_items:
         normalized = item.model_copy(
@@ -2122,7 +2156,12 @@ def _normalize_evidence_items(source_id: str, evidence_items: list[EvidenceItem]
 
     return sorted(
         normalized_by_id.values(),
-        key=lambda item: (item.span_start, item.span_end, item.evidence_type.value, item.evidence_id),
+        key=lambda item: (
+            item.span_start,
+            item.span_end,
+            item.evidence_type.value,
+            item.evidence_id,
+        ),
     )
 
 
@@ -2198,7 +2237,9 @@ def _earliest_strong_evidence_at(evidence_items: list[EvidenceItem]) -> datetime
 def _freshness_from_evidence(
     evidence_items: list[EvidenceItem],
 ) -> tuple[float, FreshnessState]:
-    reference_time = _latest_strong_evidence_at(evidence_items) or _latest_evidence_at(evidence_items)
+    reference_time = _latest_strong_evidence_at(evidence_items) or _latest_evidence_at(
+        evidence_items
+    )
     if not reference_time:
         return 0.0, FreshnessState.HISTORICAL
 
@@ -2234,7 +2275,9 @@ def _build_person_skill_state(
     first_seen_at = _merge_earliest_datetime(current_first_seen_at, previous_first_seen_at)
     first_learned_at = _merge_earliest_datetime(current_first_learned_at, previous_first_learned_at)
     first_strong_evidence_at = (
-        _merge_earliest_datetime(current_first_strong_evidence_at, previous_first_strong_evidence_at)
+        _merge_earliest_datetime(
+            current_first_strong_evidence_at, previous_first_strong_evidence_at
+        )
         if current_first_strong_evidence_at or previous_first_strong_evidence_at
         else None
     )
@@ -2243,7 +2286,9 @@ def _build_person_skill_state(
         first_learned_at=first_learned_at,
         first_strong_evidence_at=first_strong_evidence_at,
         previous_acquired_at=_row_datetime(previous_row, "acquired_at"),
-        previous_acquisition_basis=str(previous_row["acquisition_basis"]) if previous_row and previous_row.get("acquisition_basis") else None,
+        previous_acquisition_basis=str(previous_row["acquisition_basis"])
+        if previous_row and previous_row.get("acquisition_basis")
+        else None,
     )
 
     current_level = max(0, min(5, int(score_payload.level)))
@@ -2259,9 +2304,9 @@ def _build_person_skill_state(
     elif previous_peak_at:
         historical_peak_at = previous_peak_at
     else:
-        historical_peak_at = _row_datetime(previous_row, "last_strong_evidence_at") or _row_datetime(
-            previous_row, "last_evidence_at"
-        )
+        historical_peak_at = _row_datetime(
+            previous_row, "last_strong_evidence_at"
+        ) or _row_datetime(previous_row, "last_evidence_at")
 
     return PersonSkillState(
         skill_id=skill_id,
@@ -2322,7 +2367,8 @@ def _core_self_centrality(
     artifact_backed_count = sum(
         1
         for item in evidence_items
-        if item.evidence_type.value in {"implemented", "debugged", "designed", "presented", "taught", "reviewed"}
+        if item.evidence_type.value
+        in {"implemented", "debugged", "designed", "presented", "taught", "reviewed"}
     )
 
     duration_score = 0.0
@@ -2394,10 +2440,10 @@ def _skip_discovery_directory(path: Path) -> bool:
 
 def _low_signal_directory_name(dirname: str) -> bool:
     lowered = dirname.lower()
-    return (
-        lowered in LOW_SIGNAL_DIRECTORY_NAMES
-        or any(lowered.startswith(prefix) for prefix in LOW_SIGNAL_DIRECTORY_PREFIXES)
+    return lowered in LOW_SIGNAL_DIRECTORY_NAMES or any(
+        lowered.startswith(prefix) for prefix in LOW_SIGNAL_DIRECTORY_PREFIXES
     )
+
 
 def _material_root_name(relative_import_path: Path) -> str:
     parts = relative_import_path.parts
@@ -2406,6 +2452,7 @@ def _material_root_name(relative_import_path: Path) -> str:
     if parts:
         return parts[0]
     return "root"
+
 
 def _update_discovery_summary(summary: DiscoverySummary, material: ImportMaterial) -> None:
     summary.total_materials += 1
@@ -2460,9 +2507,11 @@ def _skip_extraction_reason(parsed_document: ParsedDocument) -> str | None:
         ):
             return "empty twitter archive ytd module"
 
-    if source_family == SourceFamily.REDDIT_EXPORT.value:
-        if filename in LOW_SIGNAL_REDDIT_FILENAMES:
-            return "low-signal reddit account metadata/export index"
+    if (
+        source_family == SourceFamily.REDDIT_EXPORT.value
+        and filename in LOW_SIGNAL_REDDIT_FILENAMES
+    ):
+        return "low-signal reddit account metadata/export index"
 
     if source_family == SourceFamily.DISCORD_DATA_PACKAGE.value:
         if source_family_subproduct != "messages":
@@ -2505,9 +2554,11 @@ def _skip_material_reason(material: ImportMaterial) -> str | None:
         if (material.source_family_subproduct or "").lower() in LOW_SIGNAL_TWITTER_SUBPRODUCTS:
             return "low-signal twitter account graph export"
 
-    if material.source_family == SourceFamily.REDDIT_EXPORT:
-        if filename in LOW_SIGNAL_REDDIT_FILENAMES:
-            return "low-signal reddit account metadata/export index"
+    if (
+        material.source_family == SourceFamily.REDDIT_EXPORT
+        and filename in LOW_SIGNAL_REDDIT_FILENAMES
+    ):
+        return "low-signal reddit account metadata/export index"
 
     if material.source_family == SourceFamily.DISCORD_DATA_PACKAGE:
         if (material.source_family_subproduct or "").lower() != "messages":
@@ -2553,7 +2604,9 @@ def _expanded_opencode_session_path(relative_import_path: Path) -> bool:
     return any(part.endswith(".jsonl") for part in parts[opencode_index + 1 : -1])
 
 
-def _skip_google_takeout_path_reason(*, relative_import_path: str, source_family: str) -> str | None:
+def _skip_google_takeout_path_reason(
+    *, relative_import_path: str, source_family: str
+) -> str | None:
     if source_family != SourceFamily.GOOGLE_TAKEOUT.value:
         return None
 
@@ -2579,6 +2632,7 @@ def _normalized_path_text(value: str) -> str:
     # Google Takeout localizes folder names and sometimes uses non-breaking spaces.
     normalized = unicodedata.normalize("NFKD", value.lower().replace("\xa0", " "))
     return "".join(character for character in normalized if not unicodedata.combining(character))
+
 
 def _format_counts(counts: dict[str, int]) -> str:
     if not counts:

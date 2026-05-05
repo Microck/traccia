@@ -86,7 +86,10 @@ def _normalize_document_marker(
     ocr_provider: str,
 ) -> DocumentNormalizationResult:
     if source_type != SourceType.PDF:
-        raise RuntimeError("marker is currently wired only for PDFs in traccia.")
+        raise RuntimeError(
+            "marker normalization is only available for PDF files, "
+            f"but got {source_type.value}. Use docling, markitdown, or native for DOCX files."
+        )
 
     command = [
         "marker_single",
@@ -135,14 +138,20 @@ def _normalize_document_marker(
 def _find_marker_markdown(output_dir: Path, *, source_path: Path) -> Path:
     markdown_paths = sorted(output_dir.rglob("*.md"))
     if not markdown_paths:
-        raise RuntimeError("marker completed without producing a markdown artifact.")
+        raise RuntimeError(
+            f"marker completed without producing a markdown artifact in {output_dir}."
+        )
 
     exact_matches = [path for path in markdown_paths if path.stem == source_path.stem]
     if exact_matches:
         return exact_matches[0]
     if len(markdown_paths) == 1:
         return markdown_paths[0]
-    raise RuntimeError("marker produced multiple markdown artifacts and none matched the source stem.")
+    artifact_names = ", ".join(path.name for path in markdown_paths)
+    raise RuntimeError(
+        "marker produced multiple markdown artifacts "
+        f"({artifact_names}) and none matched source stem {source_path.stem!r}."
+    )
 
 
 def _normalize_document_docling(

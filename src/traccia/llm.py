@@ -5,8 +5,6 @@ import json
 import mimetypes
 import os
 import re
-import shutil
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -259,7 +257,8 @@ class OpenAICompatibleBackend:
                 last_error = current_error
                 if attempt_index == attempts - 1:
                     raise BackendError(
-                        f"Structured response validation failed after {attempts} attempt(s): {current_error}"
+                        "Structured response validation failed after "
+                        f"{attempts} attempt(s) for schema {schema_name!r}: {current_error}"
                     ) from current_error
                 time.sleep(0.2 * (attempt_index + 1))
         raise BackendError(f"Structured response validation failed: {last_error}")
@@ -305,7 +304,10 @@ class OpenAICompatibleBackend:
             try:
                 return self._request_json(method="POST", url=url, payload=payload)
             except _HttpResponseError as exc:
-                last_error = BackendError(f"LLM backend request failed ({exc.status}): {exc.body}")
+                last_error = BackendError(
+                    "LLM backend request failed "
+                    f"({exc.status}) for model={self.config.backend.model!r} at {url}: {exc.body}"
+                )
                 if exc.status not in {408, 409, 429, 500, 502, 503, 504} or attempt_index == retries - 1:
                     raise last_error from exc
                 time.sleep(
@@ -316,12 +318,18 @@ class OpenAICompatibleBackend:
                     )
                 )
                 continue
-            except (error.URLError, TimeoutError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
-                last_error = BackendError(f"LLM backend request failed: {exc}")
+            except (error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+                last_error = BackendError(
+                    "LLM backend request failed "
+                    f"for model={self.config.backend.model!r} at {url}: {exc}"
+                )
                 if attempt_index == retries - 1:
                     raise last_error from exc
             time.sleep(_retry_delay_seconds(attempt_index=attempt_index))
-        raise BackendError(f"LLM backend request failed: {last_error}")
+        raise BackendError(
+            "LLM backend request failed after "
+            f"{retries} attempt(s) for model={self.config.backend.model!r} at {url}: {last_error}"
+        )
 
     def _get_json(self, path: str) -> dict[str, object]:
         url = f"{self.config.backend.base_url.rstrip('/')}{path}"
@@ -329,13 +337,14 @@ class OpenAICompatibleBackend:
             return self._request_json(method="GET", url=url)
         except _HttpResponseError as exc:
             raise BackendError(f"LLM backend healthcheck failed ({exc.status}): {exc.body}") from exc
-        except (error.URLError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+        except (error.URLError, json.JSONDecodeError) as exc:
             raise BackendError(f"LLM backend healthcheck failed: {exc}") from exc
 
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            "User-Agent": "traccia/0.1 (+https://github.com/Microck/traccia)",
         }
 
     def _request_json(
@@ -345,57 +354,7 @@ class OpenAICompatibleBackend:
         url: str,
         payload: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        if shutil.which("curl"):
-            return self._request_json_via_curl(method=method, url=url, payload=payload)
         return self._request_json_via_urllib(method=method, url=url, payload=payload)
-
-    def _request_json_via_curl(
-        self,
-        *,
-        method: str,
-        url: str,
-        payload: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        command = [
-            "curl",
-            "-sS",
-            "--max-time",
-            str(self.config.backend.timeout_seconds),
-            "-X",
-            method,
-            "-H",
-            f"Authorization: Bearer {self.api_key}",
-            "-H",
-            "Content-Type: application/json",
-            "-w",
-            "\n__HTTP_STATUS__:%{http_code}",
-            url,
-        ]
-        if payload is not None:
-            command.extend(["-d", json.dumps(payload)])
-
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=self.config.backend.timeout_seconds + 5,
-            check=False,
-        )
-        if completed.returncode == 28:
-            raise TimeoutError(
-                f"curl timed out after {self.config.backend.timeout_seconds}s for {url}"
-            )
-        if completed.returncode != 0:
-            stderr = completed.stderr.strip() or completed.stdout.strip()
-            raise subprocess.SubprocessError(stderr or f"curl exited with code {completed.returncode}")
-
-        body_text, marker, status_text = completed.stdout.rpartition("\n__HTTP_STATUS__:")
-        if not marker:
-            raise json.JSONDecodeError("missing HTTP status marker", completed.stdout, 0)
-        status_code = int(status_text.strip() or "0")
-        if status_code >= 400:
-            raise _HttpResponseError(status=status_code, body=body_text.strip())
-        return json.loads(body_text)
 
     def _request_json_via_urllib(
         self,
@@ -428,10 +387,9 @@ class OpenAICompatibleBackend:
             for item in content:
                 if not isinstance(item, dict):
                     continue
-                if isinstance(item.get("text"), str):
-                    text_parts.append(item["text"])
-                elif item.get("type") == "output_text" and isinstance(item.get("text"), str):
-                    text_parts.append(item["text"])
+                text = item.get("text")
+                if isinstance(text, str):
+                    text_parts.append(text)
             if text_parts:
                 return "\n".join(text_parts)
         return content

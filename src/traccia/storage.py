@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from traccia.models import (
     EvidenceItem,
@@ -15,6 +17,8 @@ from traccia.models import (
     SkillNode,
     SourceDocument,
 )
+
+SQL_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class Storage:
@@ -34,6 +38,8 @@ class Storage:
             connection.close()
 
     def _ensure_schema(self, connection: sqlite3.Connection) -> None:
+        # Static bootstrap SQL is safe to run as a script. SQLite does not support binding table
+        # or column identifiers, so additive schema updates validate identifiers before formatting.
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS extraction_checkpoints (
@@ -90,6 +96,9 @@ class Storage:
         table: str,
         columns: dict[str, str],
     ) -> None:
+        _validate_sql_identifier(table)
+        for column_name in columns:
+            _validate_sql_identifier(column_name)
         existing = {
             row["name"]
             for row in connection.execute(f"pragma table_info({table})").fetchall()
@@ -573,3 +582,8 @@ class Storage:
             )
         review_file.write_text("\n".join(lines) + ("\n" if lines else ""))
         return review_file
+
+
+def _validate_sql_identifier(identifier: str) -> None:
+    if not SQL_IDENTIFIER_PATTERN.fullmatch(identifier):
+        raise ValueError(f"Unsafe SQLite identifier: {identifier!r}")

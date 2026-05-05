@@ -85,6 +85,7 @@ Each ingest run writes one manifest file:
       "source_path": "/mnt/archive/personal-archive/reddit-export.zip",
       "archive_member": "comments.csv",
       "source_family": "reddit_export",
+      "source_family_subproduct": "comments",
       "detection_reason": "matched Reddit export marker: comments.csv",
       "status": "processed",
       "source_id": "src_comments_a1b2c3"
