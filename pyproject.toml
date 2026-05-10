@@ -9,7 +9,7 @@ description = "Local-first reflective skill graph compiler."
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
-  "pydantic>=2.11,<3",
+  "pydantic>=2.13.4,<3",
   "pypdf>=6.10.2,<7",
   "pyyaml>=6.0.3,<7",
   "typer>=0.21.2,<0.22",
