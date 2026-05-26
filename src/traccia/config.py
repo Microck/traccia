@@ -14,7 +14,6 @@ class TracciaPaths(TracciaModel):
     parsed: str = "parsed"
     evidence: str = "evidence"
     graph: str = "graph"
-    viewer: str = "viewer"
     tree: str = "tree"
     profile: str = "profile"
     state: str = "state"
@@ -30,9 +29,18 @@ class PipelineVersions(TracciaModel):
 
 
 class GraphRefreshConfig(TracciaModel):
+    live_checkpoints_enabled: bool = False
     live_checkpoint_material_interval: int = Field(default=25, ge=1)
     live_checkpoint_min_interval_seconds: float = Field(default=1800.0, ge=0.0)
     small_run_live_checkpoint_material_limit: int = Field(default=10, ge=0)
+
+
+class GraphScoringConfig(TracciaModel):
+    parallel_scores: int = Field(default=1, ge=1, le=16)
+
+
+class IngestConfig(TracciaModel):
+    parallel_extractions: int = Field(default=1, ge=1, le=16)
 
 
 class ThresholdConfig(TracciaModel):
@@ -50,7 +58,21 @@ class PrivacyConfig(TracciaModel):
 class RenderingConfig(TracciaModel):
     default_tree_format: str = "ascii"
     enable_obsidian_export: bool = True
-    enable_viewer_bundle: bool = True
+
+
+class ExtractionBackendConfig(TracciaModel):
+    name: str
+    provider: str = "openai_compatible"
+    model: str = "gpt-5-chat-latest"
+    api_key_env: str = "OPENAI_API_KEY"
+    base_url: str = "https://api.openai.com/v1"
+    api_style: str = "chat_completions"
+    structured_output_mode: str = "json_schema"
+    supports_vision: bool = False
+    vision_detail: str = "auto"
+    timeout_seconds: int = 60
+    max_retries: int = 3
+    parallel_extractions: int = Field(default=1, ge=1, le=16)
 
 
 class BackendConfig(TracciaModel):
@@ -64,6 +86,7 @@ class BackendConfig(TracciaModel):
     vision_detail: str = "auto"
     timeout_seconds: int = 60
     max_retries: int = 3
+    extraction_backends: list[ExtractionBackendConfig] = Field(default_factory=list)
 
 
 class DocumentNormalizationConfig(TracciaModel):
@@ -81,6 +104,9 @@ class MultimodalConfig(TracciaModel):
     audio_transcription_model: str = "turbo"
     audio_transcription_device: str = "cpu"
     remote_media_enrichment_command: str = "summarize"
+    remote_media_enrichment_video_mode: str = "understand"
+    enable_remote_media_slides: bool = True
+    enable_remote_media_slides_ocr: bool = True
     max_attachments_per_source: int = Field(default=4, ge=0, le=32)
     max_attachment_text_characters: int = Field(default=1200, ge=0, le=20000)
     max_attachment_transcript_characters: int = Field(default=8000, ge=0, le=100000)
@@ -90,12 +116,23 @@ class MultimodalConfig(TracciaModel):
     remote_media_enrichment_timeout_seconds: int = Field(default=180, ge=10, le=3600)
 
 
+class GoogleTakeoutConfig(TracciaModel):
+    relevance_mode: str = "skill_relevant"
+    gmail_mode: str = "metadata_plus_sent"
+    youtube_enrichment: str = "detailed"
+    photos_mode: str = "fast_vision"
+    drive_mode: str = "selective_docs"
+    max_photo_vision_samples_per_folder: int = Field(default=8, ge=0, le=100)
+
+
 class TracciaConfig(TracciaModel):
     schema_version: int = 1
     project_name: str = "traccia"
     paths: TracciaPaths = Field(default_factory=TracciaPaths)
     pipeline: PipelineVersions = Field(default_factory=PipelineVersions)
     graph_refresh: GraphRefreshConfig = Field(default_factory=GraphRefreshConfig)
+    graph_scoring: GraphScoringConfig = Field(default_factory=GraphScoringConfig)
+    ingest: IngestConfig = Field(default_factory=IngestConfig)
     thresholds: ThresholdConfig = Field(default_factory=ThresholdConfig)
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig)
     rendering: RenderingConfig = Field(default_factory=RenderingConfig)
@@ -104,6 +141,7 @@ class TracciaConfig(TracciaModel):
         default_factory=DocumentNormalizationConfig
     )
     multimodal: MultimodalConfig = Field(default_factory=MultimodalConfig)
+    google_takeout: GoogleTakeoutConfig = Field(default_factory=GoogleTakeoutConfig)
 
 
 def default_config(project_name: str = "traccia") -> TracciaConfig:

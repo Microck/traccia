@@ -160,8 +160,10 @@ class ReviewRiskLevel(StrEnum):
 
 class IngestMaterialStatus(StrEnum):
     DISCOVERED = "discovered"
+    PREPARED = "prepared"
     PROCESSED = "processed"
     SKIPPED = "skipped"
+    DELAYED = "delayed"
     FAILED = "failed"
 
 
@@ -309,6 +311,7 @@ class IngestManifest(TracciaModel):
 
 class IngestRunState(TracciaModel):
     root_uri: str
+    import_prefix: str | None = None
     updated_at: datetime
     total_materials: int = Field(ge=0)
     materials: list[IngestManifestEntry] = Field(default_factory=list)

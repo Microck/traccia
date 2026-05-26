@@ -11,7 +11,7 @@ import typer
 from traccia.bootstrap import DIRECTORIES, FILES, JSON_FILES, RepoInitializer
 from traccia.config import load_config
 from traccia.llm import BackendError, backend_from_config, backend_summary
-from traccia.pipeline import Pipeline
+from traccia.pipeline import GRAPH_SCORE_MODE_FULL, GRAPH_SCORE_MODE_INCREMENTAL, Pipeline
 from traccia.rendering import (
     ascii_tree,
     export_debug_report,
@@ -20,6 +20,7 @@ from traccia.rendering import (
     render_project,
 )
 from traccia.storage import Storage
+from traccia.viewer import export_admin_viewer, export_viewer, publish_public_bundle
 
 app = typer.Typer(help="Local-first reflective skill graph compiler.")
 alias_app = typer.Typer(help="Manage canonical aliases.")
@@ -40,6 +41,20 @@ def _pipeline(project_root: Path) -> Pipeline:
     return Pipeline(project_root.resolve())
 
 
+def _graph_score_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in {GRAPH_SCORE_MODE_INCREMENTAL, GRAPH_SCORE_MODE_FULL}:
+        raise typer.BadParameter("expected 'incremental' or 'full'")
+    return normalized
+
+
+def _ingest_score_mode(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized not in {GRAPH_SCORE_MODE_INCREMENTAL, GRAPH_SCORE_MODE_FULL, "none"}:
+        raise typer.BadParameter("expected 'incremental', 'full', or 'none'")
+    return normalized
+
+
 def _skill_markdown_path(project_root: Path, skill_id: str) -> Path:
     return project_root / "tree" / "nodes" / f"{skill_id}.md"
 
@@ -50,6 +65,117 @@ def _package_available(module_name: str) -> bool:
 
 def _command_available(command: str) -> bool:
     return shutil.which(command) is not None
+
+
+_REMOTE_TRANSCRIPTION_API_KEY_ENVS = (
+    "GROQ_API_KEY",
+    "ASSEMBLYAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENAI_API_KEY",
+    "FAL_KEY",
+)
+
+_LOCAL_WHISPER_CPP_COMMANDS = (
+    "whisper-cli",
+    "whisper-cpp",
+)
+
+_DEFAULT_WHISPER_CPP_MODEL_PATH = (
+    Path.home() / ".summarize" / "cache" / "whisper-cpp" / "models" / "ggml-base.bin"
+)
+
+
+def _env_available(name: str) -> bool:
+    return bool(os.environ.get(name, "").strip())
+
+
+def _path_env_available(name: str) -> bool:
+    value = os.environ.get(name, "").strip()
+    return bool(value and Path(value).expanduser().exists())
+
+
+def _summarize_whisper_cpp_binary_available() -> bool:
+    binary_override = os.environ.get("SUMMARIZE_WHISPER_CPP_BINARY", "").strip()
+    if binary_override:
+        return _command_available(binary_override)
+    return any(_command_available(command) for command in _LOCAL_WHISPER_CPP_COMMANDS)
+
+
+def _summarize_whisper_cpp_model_path() -> Path:
+    model_override = os.environ.get("SUMMARIZE_WHISPER_CPP_MODEL_PATH", "").strip()
+    if model_override:
+        return Path(model_override).expanduser()
+    return _DEFAULT_WHISPER_CPP_MODEL_PATH
+
+
+def _summarize_whisper_cpp_model_available() -> bool:
+    return _summarize_whisper_cpp_model_path().exists()
+
+
+def _remote_transcription_fallback_available() -> tuple[bool, bool, bool, bool]:
+    api_key_available = any(_env_available(name) for name in _REMOTE_TRANSCRIPTION_API_KEY_ENVS)
+    local_whisper_cpp_binary_available = _summarize_whisper_cpp_binary_available()
+    local_whisper_cpp_model_available = _summarize_whisper_cpp_model_available()
+    local_whisper_cpp_available = (
+        local_whisper_cpp_binary_available and local_whisper_cpp_model_available
+    )
+    return (
+        api_key_available,
+        local_whisper_cpp_available,
+        local_whisper_cpp_binary_available,
+        local_whisper_cpp_model_available,
+    )
+
+
+def _remote_media_capability_line(config) -> str:
+    enabled = config.multimodal.enable_remote_media_enrichment
+    command = config.multimodal.remote_media_enrichment_command
+    summarize_available = _command_available(command)
+    ffmpeg_available = _command_available("ffmpeg")
+    yt_dlp_available = _command_available("yt-dlp") or _path_env_available("YT_DLP_PATH")
+    tesseract_available = _command_available("tesseract")
+    (
+        api_key_available,
+        local_whisper_cpp_available,
+        local_whisper_cpp_binary_available,
+        local_whisper_cpp_model_available,
+    ) = _remote_transcription_fallback_available()
+
+    required_ready = summarize_available
+    if config.multimodal.enable_remote_media_slides:
+        required_ready = required_ready and ffmpeg_available and yt_dlp_available
+    if config.multimodal.enable_remote_media_slides_ocr:
+        required_ready = required_ready and tesseract_available
+    transcription_fallback_ready = api_key_available or local_whisper_cpp_available
+
+    if not enabled:
+        status = "disabled"
+    elif required_ready and transcription_fallback_ready:
+        status = "ready"
+    else:
+        status = "degraded"
+
+    return (
+        "remote media enrichment "
+        f"(multimodal.enable_remote_media_enrichment={str(enabled).lower()}, "
+        f"command={command}, "
+        f"video_mode={config.multimodal.remote_media_enrichment_video_mode}, "
+        f"slides={str(config.multimodal.enable_remote_media_slides).lower()}, "
+        f"slides_ocr={str(config.multimodal.enable_remote_media_slides_ocr).lower()}): "
+        f"status={status} "
+        f"summarize={'yes' if summarize_available else 'no'} "
+        f"ffmpeg={'yes' if ffmpeg_available else 'no'} "
+        f"yt-dlp={'yes' if yt_dlp_available else 'no'} "
+        f"tesseract={'yes' if tesseract_available else 'no'} "
+        "transcription_fallback="
+        f"api_key:{'yes' if api_key_available else 'no'} "
+        f"local_whisper_cpp:{'yes' if local_whisper_cpp_available else 'no'} "
+        f"whisper_cpp_binary:{'yes' if local_whisper_cpp_binary_available else 'no'} "
+        f"whisper_cpp_model:{'yes' if local_whisper_cpp_model_available else 'no'} "
+        f"whisper_cpp_model_path={_summarize_whisper_cpp_model_path().as_posix()}"
+    )
 
 
 def _optional_capability_lines(config) -> list[str]:
@@ -73,12 +199,7 @@ def _optional_capability_lines(config) -> list[str]:
         f"ffprobe={'yes' if _command_available('ffprobe') else 'no'} "
         f"whisper={'yes' if _command_available('whisper') else 'no'}"
     )
-    lines.append(
-        "remote media enrichment "
-        f"(multimodal.enable_remote_media_enrichment={str(config.multimodal.enable_remote_media_enrichment).lower()}, "
-        f"command={config.multimodal.remote_media_enrichment_command}): "
-        f"summarize={'yes' if _command_available(config.multimodal.remote_media_enrichment_command) else 'no'}"
-    )
+    lines.append(_remote_media_capability_line(config))
     return lines
 
 
@@ -214,10 +335,17 @@ def ingest(
     project_root: Path = typer.Option(
         Path("."), "--project-root", help="Initialized traccia repository."
     ),
+    score_mode: str = typer.Option(
+        GRAPH_SCORE_MODE_INCREMENTAL,
+        "--score-mode",
+        help="Graph scoring mode after ingest: incremental, full, or none.",
+    ),
 ) -> None:
+    resolved_score_mode = _ingest_score_mode(score_mode)
     _, processed = _pipeline(project_root).ingest_file(path.resolve(), root=path.parent.resolve())
-    _pipeline(project_root).recompute_graph()
-    render_project(project_root.resolve(), storage=_storage(project_root))
+    if resolved_score_mode != "none":
+        _pipeline(project_root).recompute_graph(score_mode=resolved_score_mode)
+        render_project(project_root.resolve(), storage=_storage(project_root))
     typer.echo(f"processed={int(processed)} skipped={int(not processed)}")
 
 
@@ -227,12 +355,162 @@ def ingest_dir(
     project_root: Path = typer.Option(
         Path("."), "--project-root", help="Initialized traccia repository."
     ),
+    import_prefix: Path | None = typer.Option(
+        None,
+        "--import-prefix",
+        help="Stable relative identity prefix for source IDs and raw/imported paths.",
+    ),
+    sync_graph: bool = typer.Option(
+        True,
+        "--sync-graph/--no-sync-graph",
+        help="Recompute and render graph projections after extraction.",
+    ),
+    sync_deletions: bool = typer.Option(
+        True,
+        "--sync-deletions/--no-sync-deletions",
+        help="Mark previously tracked sources missing from this import scope as deleted.",
+    ),
+    parallel_extractions: int | None = typer.Option(
+        None,
+        "--parallel-extractions",
+        min=1,
+        max=16,
+        help="Number of concurrent evidence extraction workers. Defaults to config ingest.parallel_extractions.",
+    ),
+    score_mode: str = typer.Option(
+        GRAPH_SCORE_MODE_INCREMENTAL,
+        "--score-mode",
+        help="Graph scoring mode after extraction: incremental, full, or none.",
+    ),
 ) -> None:
-    result = _pipeline(project_root).ingest_directory(path.resolve())
-    typer.echo(
-        f"discovered={result.discovered} imported={result.imported} processed={result.processed} skipped={result.skipped} "
-        f"failed={result.failed} deleted={result.deleted}"
+    resolved_score_mode = _ingest_score_mode(score_mode)
+    effective_sync_graph = sync_graph and resolved_score_mode != "none"
+    result = _pipeline(project_root).ingest_directory(
+        path.resolve(),
+        import_prefix=import_prefix,
+        sync_graph=effective_sync_graph,
+        sync_deletions=sync_deletions,
+        parallel_extractions=parallel_extractions,
+        score_mode=resolved_score_mode
+        if resolved_score_mode != "none"
+        else GRAPH_SCORE_MODE_INCREMENTAL,
     )
+    typer.echo(
+        f"discovered={result.discovered} imported={result.imported} prepared={result.prepared} "
+        f"processed={result.processed} skipped={result.skipped} "
+        f"delayed={result.delayed} failed={result.failed} deleted={result.deleted} "
+        f"graph_sync={str(effective_sync_graph).lower()} "
+        f"score_mode={resolved_score_mode} deletion_sync={str(sync_deletions).lower()}"
+    )
+
+
+@app.command("stage-dir")
+def stage_dir(
+    path: Path,
+    project_root: Path = typer.Option(
+        Path("."), "--project-root", help="Initialized traccia repository."
+    ),
+    import_prefix: Path | None = typer.Option(
+        None,
+        "--import-prefix",
+        help="Stable relative identity prefix for source IDs and raw/imported paths.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Re-prepare materials even when their parsed artifacts are current.",
+    ),
+) -> None:
+    """Prepare materials without LLM extraction or graph recompute.
+
+    This is safe to run beside an already-active scoring process because it only
+    discovers, imports, parses, and checkpoints material state. Evidence
+    extraction and graph scoring are deferred to a normal ingest/scoring run.
+    """
+
+    result = _pipeline(project_root).ingest_directory(
+        path.resolve(),
+        force=force,
+        extract=False,
+        sync_graph=False,
+        sync_deletions=False,
+        import_prefix=import_prefix,
+    )
+    typer.echo(
+        f"discovered={result.discovered} imported={result.imported} prepared={result.prepared} "
+        f"processed={result.processed} skipped={result.skipped} delayed={result.delayed} "
+        f"failed={result.failed} deleted={result.deleted} extraction=deferred "
+        "graph_sync=deferred deletion_sync=deferred"
+    )
+
+
+@app.command("merge-project")
+def merge_project(
+    source_project_root: Path,
+    project_root: Path = typer.Option(
+        Path("."), "--project-root", help="Target initialized traccia repository."
+    ),
+    rebuild: bool = typer.Option(
+        True,
+        "--rebuild/--no-rebuild",
+        help="Recompute and render the target graph after importing evidence.",
+    ),
+    copy_artifacts: bool = typer.Option(
+        True,
+        "--copy-artifacts/--no-copy-artifacts",
+        help="Copy missing parsed/evidence artifacts for resume consistency.",
+    ),
+) -> None:
+    """Merge source/evidence records from another Traccia project into this one."""
+
+    target_root = project_root.resolve()
+    source_root = source_project_root.resolve()
+    source_db_path = source_root / "state" / "catalog.sqlite"
+    if not source_db_path.exists():
+        typer.echo(f"missing source catalog: {source_db_path}")
+        raise typer.Exit(code=1)
+    if source_db_path == target_root / "state" / "catalog.sqlite":
+        typer.echo("source and target projects are the same")
+        raise typer.Exit(code=1)
+
+    counts = _storage(target_root).merge_imported_records_from(source_db_path)
+    artifact_counts = {"parsed": 0, "evidence": 0}
+    if copy_artifacts:
+        artifact_counts = _copy_missing_merge_artifacts(source_root=source_root, target_root=target_root)
+
+    if rebuild:
+        _pipeline(target_root).recompute_graph()
+        render_project(target_root, storage=_storage(target_root))
+
+    typer.echo(
+        " ".join(
+            [
+                f"sources={counts['sources']}",
+                f"source_spans={counts['source_spans']}",
+                f"evidence_items={counts['evidence_items']}",
+                f"parsed_artifacts={artifact_counts['parsed']}",
+                f"evidence_artifacts={artifact_counts['evidence']}",
+                f"rebuilt={str(rebuild).lower()}",
+            ]
+        )
+    )
+
+
+def _copy_missing_merge_artifacts(*, source_root: Path, target_root: Path) -> dict[str, int]:
+    counts = {"parsed": 0, "evidence": 0}
+    for directory_name in ("parsed", "evidence"):
+        source_directory = source_root / directory_name
+        target_directory = target_root / directory_name
+        if not source_directory.exists():
+            continue
+        target_directory.mkdir(parents=True, exist_ok=True)
+        for source_path in source_directory.glob("*.json"):
+            target_path = target_directory / source_path.name
+            if target_path.exists():
+                continue
+            shutil.copy2(source_path, target_path)
+            counts[directory_name] += 1
+    return counts
 
 
 @app.command("discover-dir")
@@ -241,9 +519,17 @@ def discover_dir(
     project_root: Path = typer.Option(
         Path("."), "--project-root", help="Initialized traccia repository."
     ),
+    import_prefix: Path | None = typer.Option(
+        None,
+        "--import-prefix",
+        help="Stable relative identity prefix to use while previewing source IDs.",
+    ),
     format: str = typer.Option("text", "--format", help="text or json"),
 ) -> None:
-    summary = _pipeline(project_root).discover_directory(path.resolve())
+    summary = _pipeline(project_root).discover_directory(
+        path.resolve(),
+        import_prefix=import_prefix,
+    )
     payload = {
         "root_uri": path.resolve().as_uri(),
         "materials": summary.total_materials,
@@ -279,6 +565,36 @@ def rebuild(
 ) -> None:
     result = _pipeline(project_root).rebuild()
     typer.echo(f"rebuilt={result.processed}")
+
+
+@app.command()
+def score(
+    mode: str = typer.Option(
+        GRAPH_SCORE_MODE_INCREMENTAL,
+        "--mode",
+        help="Graph scoring mode: incremental reuses unchanged work; full ignores score caches.",
+    ),
+    parallel_scores: int | None = typer.Option(
+        None,
+        "--parallel-scores",
+        min=1,
+        max=16,
+        help="Number of concurrent skill scoring workers. Defaults to config graph_scoring.parallel_scores.",
+    ),
+    project_root: Path = typer.Option(
+        Path("."), "--project-root", help="Initialized traccia repository."
+    ),
+) -> None:
+    resolved_mode = _graph_score_mode(mode)
+    _pipeline(project_root).recompute_graph(
+        score_mode=resolved_mode,
+        parallel_scores=parallel_scores,
+    )
+    render_project(project_root.resolve(), storage=_storage(project_root))
+    typer.echo(
+        f"scored={resolved_mode} parallel_scores={parallel_scores or 'config'} "
+        f"rendered={project_root.resolve()}"
+    )
 
 
 @app.command()
@@ -351,15 +667,6 @@ def evidence(
     for item in evidence_items:
         if row["name"] in item.skill_candidates:
             typer.echo(f"{item.evidence_id}: {item.evidence_type.value} - {item.quote}")
-
-
-@app.command()
-def viewer(
-    project_root: Path = typer.Option(
-        Path("."), "--project-root", help="Initialized traccia repository."
-    ),
-) -> None:
-    typer.echo((project_root.resolve() / "viewer" / "index.html").as_uri())
 
 
 @app.command()
@@ -522,6 +829,92 @@ def export_debug_report_command(
 ) -> None:
     render_project(project_root.resolve(), storage=_storage(project_root))
     typer.echo(export_debug_report(project_root.resolve()))
+
+
+@export_app.command("viewer")
+def export_viewer_command(
+    project_root: Path = typer.Option(
+        Path("."), "--project-root", help="Initialized traccia repository."
+    ),
+    no_sound: bool = typer.Option(
+        False,
+        "--no-sound",
+        help="Disable SFX in the exported public viewer by default.",
+    ),
+) -> None:
+    """Generate the read-only public finished-run skill map viewer.
+
+    Produces a static export folder at ``exports/viewer/`` containing a
+    public-safe graph contract, HTML, CSS, JS, and a procedural SFX engine.
+    The viewer is desktop-first but responsive, with pan/zoom, search,
+    filters, minimap, legend, node drawer, and hash deep links.
+    """
+    render_project(project_root.resolve(), storage=_storage(project_root))
+    export_path = export_viewer(project_root.resolve(), enable_sound=not no_sound)
+    typer.echo(export_path)
+
+
+@export_app.command("admin")
+def export_admin_command(
+    project_root: Path = typer.Option(
+        Path("."), "--project-root", help="Initialized traccia repository."
+    ),
+    no_sound: bool = typer.Option(
+        False,
+        "--no-sound",
+        help="Disable SFX in the exported admin viewer by default.",
+    ),
+) -> None:
+    """Generate the admin curation viewer for the finished-run skill map.
+
+    Produces a static export folder at ``exports/viewer-admin/`` containing
+    the full internal graph (admin-visible, includes hidden/disputed/review/
+    low-confidence nodes), curation.json, and the admin viewer assets. The
+    admin can hide/mute, restore, feature/pin, collapse/expand domains, add
+    public label/note overrides, and save curation.json.
+
+    When running locally, the save action writes directly to the export
+    folder. Otherwise it triggers a browser download of curation.json.
+    """
+    render_project(project_root.resolve(), storage=_storage(project_root))
+    export_path = export_admin_viewer(project_root.resolve(), enable_sound=not no_sound)
+    typer.echo(export_path)
+
+
+@export_app.command("publish")
+def export_publish_command(
+    project_root: Path = typer.Option(
+        Path("."), "--project-root", help="Initialized traccia repository."
+    ),
+    no_sound: bool = typer.Option(
+        False,
+        "--no-sound",
+        help="Disable SFX in the published public viewer by default.",
+    ),
+    output_dir: str | None = typer.Option(
+        None,
+        "--output-dir",
+        help="Output directory name under exports/ (default: viewer-public).",
+    ),
+) -> None:
+    """Generate the redacted public bundle from graph.json + curation.json.
+
+    Reads the full internal graph and admin-authored curation.json (from
+    ``exports/viewer/curation.json``), applies all redaction rules, and
+    writes a separate public bundle with its own viewer assets.
+
+    The public bundle physically excludes hidden nodes, hidden edges,
+    private/redacted provenance, raw source paths, raw excerpts, sensitive
+    evidence IDs, disputed/review nodes (unless approved), and
+    low-confidence nodes (unless approved).
+    """
+    render_project(project_root.resolve(), storage=_storage(project_root))
+    publish_path = publish_public_bundle(
+        project_root.resolve(),
+        enable_sound=not no_sound,
+        output_dir=output_dir,
+    )
+    typer.echo(publish_path)
 
 
 @app.command()

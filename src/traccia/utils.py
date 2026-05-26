@@ -32,7 +32,7 @@ def file_sha256(path: Path) -> str:
 
 
 def source_id_for_relative_path(relative_path: Path) -> str:
-    slug = slugify(relative_path.stem)
+    slug = slugify(relative_path.stem)[:96].rstrip("-") or "item"
     return f"src_{slug}_{short_hash(relative_path.as_posix(), length=6)}"
 
 

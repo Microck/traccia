@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,6 +20,14 @@ from traccia.models import (
 )
 
 SQL_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SQLITE_BUSY_TIMEOUT_MS = 300_000
+SQLITE_CONNECT_TIMEOUT_SECONDS = SQLITE_BUSY_TIMEOUT_MS / 1000
+SQLITE_LOCK_RETRY_ATTEMPTS = 5
+
+
+def _is_sqlite_lock_error(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).lower()
+    return "database is locked" in message or "database table is locked" in message
 
 
 class Storage:
@@ -28,14 +37,43 @@ class Storage:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.db_path)
+        connection = sqlite3.connect(
+            self.db_path,
+            timeout=SQLITE_CONNECT_TIMEOUT_SECONDS,
+        )
+        self._configure_connection(connection)
         connection.row_factory = sqlite3.Row
         try:
-            self._ensure_schema(connection)
+            self._ensure_schema_with_retries(connection)
             yield connection
-            connection.commit()
+            self._commit_with_retries(connection)
         finally:
             connection.close()
+
+    def _configure_connection(self, connection: sqlite3.Connection) -> None:
+        connection.execute(f"pragma busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+        connection.execute("pragma journal_mode = WAL")
+        connection.execute("pragma synchronous = NORMAL")
+
+    def _ensure_schema_with_retries(self, connection: sqlite3.Connection) -> None:
+        for attempt_index in range(SQLITE_LOCK_RETRY_ATTEMPTS):
+            try:
+                self._ensure_schema(connection)
+                return
+            except sqlite3.OperationalError as exc:
+                if not _is_sqlite_lock_error(exc) or attempt_index == SQLITE_LOCK_RETRY_ATTEMPTS - 1:
+                    raise
+                time.sleep(1.0 + attempt_index)
+
+    def _commit_with_retries(self, connection: sqlite3.Connection) -> None:
+        for attempt_index in range(SQLITE_LOCK_RETRY_ATTEMPTS):
+            try:
+                connection.commit()
+                return
+            except sqlite3.OperationalError as exc:
+                if not _is_sqlite_lock_error(exc) or attempt_index == SQLITE_LOCK_RETRY_ATTEMPTS - 1:
+                    raise
+                time.sleep(1.0 + attempt_index)
 
     def _ensure_schema(self, connection: sqlite3.Connection) -> None:
         # Static bootstrap SQL is safe to run as a script. SQLite does not support binding table
@@ -63,6 +101,25 @@ class Storage:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY(candidate_name, support_fingerprint)
+            );
+
+            CREATE TABLE IF NOT EXISTS graph_skill_score_cache (
+                skill_id TEXT NOT NULL,
+                evidence_fingerprint TEXT NOT NULL,
+                score_payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(skill_id, evidence_fingerprint)
+            );
+
+            CREATE TABLE IF NOT EXISTS pipeline_runs (
+                run_id TEXT PRIMARY KEY,
+                step_name TEXT NOT NULL,
+                pipeline_version TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                details_json TEXT NOT NULL DEFAULT '{}'
             );
             """
         )
@@ -187,22 +244,34 @@ class Storage:
                     span_id = f"{span.span_id}::{index}"
                     while span_id in seen_span_ids:
                         span_id = f"{span.span_id}::{index}:{len(seen_span_ids)}"
-                seen_span_ids.add(span_id)
-                connection.execute(
-                    """
-                    insert into source_spans (
-                        span_id, source_id, span_start, span_end, label, content_hash
-                    ) values (?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        span_id,
-                        source_id,
-                        span.span_start,
-                        span.span_end,
-                        span.segment_kind,
-                        span_id,
-                    ),
-                )
+                suffix = 0
+                while True:
+                    try:
+                        connection.execute(
+                            """
+                            insert into source_spans (
+                                span_id, source_id, span_start, span_end, label, content_hash
+                            ) values (?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                span_id,
+                                source_id,
+                                span.span_start,
+                                span.span_end,
+                                span.segment_kind,
+                                span_id,
+                            ),
+                        )
+                        seen_span_ids.add(span_id)
+                        break
+                    except sqlite3.IntegrityError as exc:
+                        if "source_spans.span_id" not in str(exc):
+                            raise
+                        # span_id is the table primary key. Older parsers and some structured
+                        # exports can collide across sources, so keep the parser's preferred ID
+                        # when possible and add a stable source-scoped suffix only on collision.
+                        suffix += 1
+                        span_id = f"{span.span_id}::{source_id}:{index}:{suffix}"
 
     def replace_source_evidence(self, source_id: str, evidence_items: list[EvidenceItem]) -> None:
         with self.connect() as connection:
@@ -308,6 +377,16 @@ class Storage:
             ).fetchone()
             return dict(row) if row else None
 
+    def list_graph_candidate_cache_rows(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                select candidate_name, support_fingerprint, canonical_decision_json, score_payload_json
+                from graph_candidate_cache
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
     def upsert_graph_candidate_cache(
         self,
         *,
@@ -338,6 +417,103 @@ class Storage:
                     score_payload_json,
                 ),
             )
+
+    def fetch_graph_skill_score_cache(
+        self,
+        *,
+        skill_id: str,
+        evidence_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                select *
+                from graph_skill_score_cache
+                where skill_id = ? and evidence_fingerprint = ?
+                """,
+                (skill_id, evidence_fingerprint),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_graph_skill_score_cache_rows(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                select skill_id, evidence_fingerprint, score_payload_json
+                from graph_skill_score_cache
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def upsert_graph_skill_score_cache(
+        self,
+        *,
+        skill_id: str,
+        evidence_fingerprint: str,
+        score_payload_json: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                insert into graph_skill_score_cache (
+                    skill_id,
+                    evidence_fingerprint,
+                    score_payload_json,
+                    updated_at
+                ) values (?, ?, ?, CURRENT_TIMESTAMP)
+                on conflict(skill_id, evidence_fingerprint) do update set
+                    score_payload_json = excluded.score_payload_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (skill_id, evidence_fingerprint, score_payload_json),
+            )
+
+    def count_graph_skill_score_cache_rows(self) -> int:
+        with self.connect() as connection:
+            row = connection.execute("select count(*) as count from graph_skill_score_cache").fetchone()
+            return int(row["count"])
+
+    def upsert_pipeline_run(
+        self,
+        *,
+        run_id: str,
+        step_name: str,
+        pipeline_version: str,
+        status: str,
+        started_at: str,
+        completed_at: str | None,
+        details: dict[str, Any],
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                insert into pipeline_runs (
+                    run_id, step_name, pipeline_version, status, started_at,
+                    completed_at, details_json
+                ) values (?, ?, ?, ?, ?, ?, ?)
+                on conflict(run_id) do update set
+                    status = excluded.status,
+                    completed_at = excluded.completed_at,
+                    details_json = excluded.details_json
+                """,
+                (
+                    run_id,
+                    step_name,
+                    pipeline_version,
+                    status,
+                    started_at,
+                    completed_at,
+                    json.dumps(details, sort_keys=True),
+                ),
+            )
+
+    def fetch_pipeline_run(self, run_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "select * from pipeline_runs where run_id = ?",
+                (run_id,),
+            ).fetchone()
+            return dict(row) if row else None
 
     def list_evidence(self) -> list[EvidenceItem]:
         with self.connect() as connection:
@@ -583,7 +759,93 @@ class Storage:
         review_file.write_text("\n".join(lines) + ("\n" if lines else ""))
         return review_file
 
+    def merge_imported_records_from(self, source_db_path: Path) -> dict[str, int]:
+        """Merge source-derived records from another Traccia catalog.
+
+        The graph tables are intentionally excluded. A project graph is derived from
+        evidence, so importing already-derived skills would split canonicalization
+        decisions across model/project boundaries. Extraction checkpoints are also
+        excluded because they are only safe inside the exact pipeline/model run that
+        created them.
+        """
+
+        source_db_path = source_db_path.resolve()
+        if not source_db_path.exists():
+            raise FileNotFoundError(f"Source catalog not found: {source_db_path}")
+        if source_db_path == self.db_path.resolve():
+            raise ValueError("Cannot merge a catalog into itself")
+
+        with self.connect() as connection:
+            connection.execute("attach database ? as source_catalog", (str(source_db_path),))
+            counts = {
+                "sources": _insert_missing_rows(
+                    connection,
+                    table="sources",
+                    columns=(
+                        "source_id",
+                        "uri",
+                        "source_type",
+                        "source_category",
+                        "parser",
+                        "sha256",
+                        "created_at",
+                        "ingested_at",
+                        "title",
+                        "language",
+                        "sensitivity",
+                        "metadata_json",
+                        "status",
+                    ),
+                ),
+                "source_spans": _insert_missing_rows(
+                    connection,
+                    table="source_spans",
+                    columns=(
+                        "span_id",
+                        "source_id",
+                        "span_start",
+                        "span_end",
+                        "label",
+                        "content_hash",
+                    ),
+                ),
+                "evidence_items": _insert_missing_rows(
+                    connection,
+                    table="evidence_items",
+                    columns=(
+                        "evidence_id",
+                        "source_id",
+                        "span_start",
+                        "span_end",
+                        "quote",
+                        "evidence_type",
+                        "reliability",
+                        "extractor_version",
+                        "confidence",
+                        "payload_json",
+                    ),
+                ),
+            }
+        return counts
+
 
 def _validate_sql_identifier(identifier: str) -> None:
     if not SQL_IDENTIFIER_PATTERN.fullmatch(identifier):
         raise ValueError(f"Unsafe SQLite identifier: {identifier!r}")
+
+
+def _insert_missing_rows(
+    connection: sqlite3.Connection, *, table: str, columns: tuple[str, ...]
+) -> int:
+    _validate_sql_identifier(table)
+    for column in columns:
+        _validate_sql_identifier(column)
+    column_list = ", ".join(columns)
+    connection.execute(
+        f"""
+        insert or ignore into {table} ({column_list})
+        select {column_list}
+        from source_catalog.{table}
+        """
+    )
+    return int(connection.execute("select changes()").fetchone()[0])

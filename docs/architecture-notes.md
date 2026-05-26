@@ -4,7 +4,7 @@ This document captures implementation-level decisions that are easy to lose in c
 
 ## persistence
 
-SQLite is the canonical derived state. Markdown, JSON, the static viewer, Obsidian exports, and profile files are projections over `state/catalog.sqlite`.
+SQLite is the canonical derived state. Markdown, JSON, Obsidian exports, and profile files are projections over `state/catalog.sqlite`.
 
 The schema is initialized from static SQL in `bootstrap.py` and incrementally checked in `storage.py`. SQLite cannot bind table or column identifiers, so any dynamic identifier formatting must validate identifiers first.
 

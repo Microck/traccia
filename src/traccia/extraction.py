@@ -51,6 +51,8 @@ def extract_evidence(document: ParsedDocument) -> ExtractionResult:
     unresolved_candidates: dict[str, list[str]] = defaultdict(list)
 
     for span in document.spans:
+        if _skip_span_for_attribution(document=document, heading=span.heading):
+            continue
         candidate_names = match_skill_names(span.text)
         if not candidate_names and document.source.source_type != SourceType.CODE:
             continue
@@ -84,6 +86,14 @@ def extract_evidence(document: ParsedDocument) -> ExtractionResult:
                 unresolved_candidates[name].append(evidence_item.evidence_id)
 
     return ExtractionResult(evidence_items=evidence_items, unresolved_candidates=dict(unresolved_candidates))
+
+
+def _skip_span_for_attribution(*, document: ParsedDocument, heading: str | None) -> bool:
+    if document.source.source_category != SourceCategory.AI_DIALOGUE:
+        return False
+    if document.source.metadata.get("attribution_policy") != "only user/human/developer spans may produce person-skill evidence":
+        return False
+    return (heading or "").strip().lower() != "user"
 
 
 def _time_reference_for(document: ParsedDocument) -> str | None:

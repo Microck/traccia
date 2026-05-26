@@ -27,6 +27,11 @@ tmp/
 !.env.example
 .agent-runtime.json
 
+# Licensed font binaries for local viewer exports. Keep these out of commits;
+# exports copy them into generated tmp/ bundles when present locally.
+private/font-assets/
+docs/design-drafts/
+
 # Local E2E runner/watchdog wrappers generated during live backend testing.
 scripts/traccia-ingest-loop.sh
 scripts/traccia-progress-monitor.sh
@@ -35,3 +40,4 @@ scripts/traccia-watchdog.py
 
 # dora code context index
 .dora/
+.residue/

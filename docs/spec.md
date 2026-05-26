@@ -180,8 +180,20 @@ Rules:
 - archive containers such as zip files are expanded into individually tracked materials
 - the detected source family and the detection reason are stored in source metadata and per-run ingest manifests
 - family-specific subproducts should be tracked in discovery summaries and progress state so large ingests can be monitored by export slice, not just by top-level family
+- staged directory ingest may prepare materials while graph scoring is already running, but that mode must not call the LLM extractor, recompute the graph, or delete previously known sources
+- full directory extraction may run while graph scoring is already running only when all runners share the same LLM request lease and the ingest runner defers graph sync and deletion sync
+- directory extraction may run multiple material-level evidence workers inside one ingest process when configured, but graph scoring, canonicalization, manifest updates, progress updates, deletion sync, and graph checkpoints must remain serialized
+- the extraction worker pool may be split across multiple OpenAI-style backends, but canonicalization and scoring stay on the primary backend
+- parallel extraction workers must not compress multiple materials into one evidence prompt; each worker still extracts evidence from one material and its file-local chunks
+- targeted subfolder ingests must support an explicit import prefix so source IDs do not change when a previously broader archive is ingested by one subfolder, and so same-named account exports do not collide
 - known export families should be allowed to normalize raw provider formats such as HTML dumps, JS-wrapped JSON, or CSV bundles into cleaner per-record text before LLM extraction
 - generic parsing remains available as a fallback when no export-family marker matches
+- Google Takeout ingestion should apply a deterministic relevance policy before parsing so zero-value account metadata, empty exports, raw media binaries, sidecars, caches, and bulk runtime/game data do not consume model quota
+- Google Photos sidecars should be paired with sampled image materials instead of being ingested as standalone text evidence
+- graph scoring must support both default incremental mode and explicit full mode
+- incremental graph scoring must reuse unchanged candidate decisions and unchanged final skill score fingerprints
+- full graph scoring must bypass graph scoring caches and recompute graph decisions from stored evidence
+- graph scoring progress must be inspectable separately from material ingest progress
 
 ### 6.7 Document normalization
 Document-like inputs may require a normalization step before span segmentation. This is distinct from source-family detection.
@@ -205,7 +217,6 @@ Required outputs:
 - `state/catalog.sqlite` - system state
 - `state/manifests/<ingest-id>.json` - per-run ingest manifest with discovered materials, source-family classification, and processing outcome
 - `state/review_queue.jsonl` - pending human review items
-- `viewer/` - generated read-only local graph browser bundle
 
 Secondary outputs:
 - `profile/skill.md` - synthesized top-level profile
@@ -530,7 +541,6 @@ Rules:
 - update tree exports
 - append to log
 - update profile summaries
-- update the read-only local viewer bundle
 
 ## 14. Prompting / LLM contracts
 
@@ -646,7 +656,6 @@ View modes:
 - ascii tree in CLI
 - mermaid export
 - JSON for frontend
-- minimal read-only local graph browser
 - Obsidian browsing over generated markdown exports
 
 ## 20. CLI specification
@@ -693,11 +702,7 @@ traccia node <skill-id>
 traccia explain <skill-or-alias>
 traccia why <skill-id>
 traccia evidence <skill-id>
-traccia viewer
 ```
-
-`viewer` prints the generated `viewer/index.html` file URI. It is intentionally a
-static-bundle pointer, not a long-running web server command.
 
 ### 20.5 Review
 ```bash
@@ -747,7 +752,6 @@ traccia/
   graph/
     graph.json
     tree.json
-  viewer/
   tree/
     index.md
     log.md
@@ -879,7 +883,6 @@ Recommended default stack:
 - optional local tools such as tesseract, ffmpeg, whisper, and summarize for media enrichment
 - sentence-transformers or API embeddings for alias matching
 - optional local model via Ollama
-- static JS for the generated local viewer bundle
 
 Why Python:
 - strongest parsing ecosystem

@@ -58,6 +58,60 @@ def test_parse_ai_conversation_export_builds_chat_spans_with_stable_line_numbers
     )
 
 
+def test_parse_agent_log_markdown_preserves_roles_for_attribution(tmp_path: Path) -> None:
+    log_path = tmp_path / "session.md"
+    log_path.write_text(
+        "\n".join(
+            [
+                "# Session",
+                "User: I built a Python parser.",
+                "",
+                "Assistant: I debugged the storage layer.",
+                "",
+                "Thinking: Need to inspect private state.",
+            ]
+        )
+    )
+
+    parsed = parse_document(
+        log_path,
+        project_relative_path=Path("archive/agent-logs/codex/session.md"),
+    )
+
+    assert parsed.source.source_type == SourceType.CHAT
+    assert parsed.source.source_category == SourceCategory.AI_DIALOGUE
+    assert parsed.source.parser == "agent-log-markdown"
+    assert parsed.source.metadata["attribution_policy"] == (
+        "only user/human/developer spans may produce person-skill evidence"
+    )
+    assert [span.heading for span in parsed.spans] == ["user", "assistant", "thinking"]
+    assert "User: I built a Python parser." in parsed.text
+    assert "Assistant: I debugged the storage layer." in parsed.text
+
+
+def test_parse_agent_log_jsonl_preserves_roles_for_attribution(tmp_path: Path) -> None:
+    log_path = tmp_path / "session.jsonl"
+    log_path.write_text(
+        "\n".join(
+            [
+                json.dumps({"role": "user", "content": "I wrote TypeScript tests."}),
+                json.dumps({"role": "assistant", "content": "I implemented the feature."}),
+                json.dumps({"role": "tool", "content": "pytest output"}),
+            ]
+        )
+    )
+
+    parsed = parse_document(
+        log_path,
+        project_relative_path=Path("archive/agent-logs/opencode/session.jsonl"),
+    )
+
+    assert parsed.source.source_type == SourceType.CHAT
+    assert parsed.source.source_category == SourceCategory.AI_DIALOGUE
+    assert parsed.source.parser == "agent-log-jsonl"
+    assert [span.heading for span in parsed.spans] == ["user", "assistant", "tool"]
+
+
 def test_parse_instagram_export_html_uses_family_normalizer(tmp_path: Path) -> None:
     export_path = tmp_path / "message_1.html"
     export_path.write_text(
@@ -146,6 +200,133 @@ def test_parse_remote_media_url_skips_enrichment_when_summarize_missing(tmp_path
     assert parsed.attachments[0].extracted_text is None
 
 
+def test_parse_remote_media_url_uses_default_visual_youtube_enrichment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    note_path = tmp_path / "notes.md"
+    note_path.write_text("watch https://www.youtube.com/watch?v=abc123 for CAD fixture ideas")
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr("traccia.parsers.shutil.which", lambda command: f"/bin/{command}")
+
+    def fake_run(command: list[str], **kwargs: object) -> types.SimpleNamespace:
+        del kwargs
+        commands.append(command)
+        return types.SimpleNamespace(returncode=0, stdout="fixture layout and machining setup")
+
+    monkeypatch.setattr("traccia.parsers.subprocess.run", fake_run)
+
+    parsed = parse_document(
+        note_path,
+        project_relative_path=Path("exports/notes.md"),
+    )
+
+    assert parsed.attachments[0].extracted_text == "fixture layout and machining setup"
+    assert commands == [
+        [
+            "summarize",
+            "https://www.youtube.com/watch?v=abc123",
+            "--extract",
+            "--plain",
+            "--format",
+            "text",
+            "--video-mode",
+            "understand",
+            "--youtube",
+            "auto",
+            "--timeout",
+            "180s",
+            "--max-extract-characters",
+            "8000",
+            "--slides",
+            "--slides-ocr",
+        ]
+    ]
+    assert parsed.attachments[0].metadata["url_enrichment_video_mode"] == "understand"
+    assert parsed.attachments[0].metadata["url_enrichment_slides"] is True
+    assert parsed.attachments[0].metadata["url_enrichment_slides_ocr"] is True
+
+
+def test_parse_remote_media_url_can_downgrade_to_transcript_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    note_path = tmp_path / "notes.md"
+    note_path.write_text("watch https://youtu.be/abc123")
+    commands: list[list[str]] = []
+    config = TracciaConfig.model_validate(
+        {
+            "multimodal": {
+                "remote_media_enrichment_video_mode": "transcript",
+                "enable_remote_media_slides": False,
+                "enable_remote_media_slides_ocr": False,
+            }
+        }
+    )
+
+    monkeypatch.setattr("traccia.parsers.shutil.which", lambda command: f"/bin/{command}")
+
+    def fake_run(command: list[str], **kwargs: object) -> types.SimpleNamespace:
+        del kwargs
+        commands.append(command)
+        return types.SimpleNamespace(returncode=0, stdout="spoken transcript only")
+
+    monkeypatch.setattr("traccia.parsers.subprocess.run", fake_run)
+
+    parsed = parse_document(
+        note_path,
+        project_relative_path=Path("exports/notes.md"),
+        config=config,
+    )
+
+    assert parsed.attachments[0].extracted_text == "spoken transcript only"
+    assert "--slides" not in commands[0]
+    assert "--slides-ocr" not in commands[0]
+    assert commands[0][commands[0].index("--video-mode") + 1] == "transcript"
+    assert parsed.attachments[0].metadata["url_enrichment_video_mode"] == "transcript"
+    assert parsed.attachments[0].metadata["url_enrichment_slides"] is False
+    assert parsed.attachments[0].metadata["url_enrichment_slides_ocr"] is False
+
+
+def test_parse_document_ignores_malformed_url_like_attachment_text(tmp_path: Path) -> None:
+    note_path = tmp_path / "notes.md"
+    note_path.write_text(
+        "User: I debugged malformed URL handling around http://[broken and kept parsing.\n"
+    )
+
+    parsed = parse_document(
+        note_path,
+        project_relative_path=Path("agent-logs/malformed-url.md"),
+    )
+
+    assert parsed.source.metadata.get("attachment_count") is None
+    assert "malformed URL handling" in parsed.text
+
+
+def test_parse_document_ignores_attachment_like_text_too_long_for_filesystem(
+    tmp_path: Path,
+) -> None:
+    export_path = tmp_path / "messages.csv"
+    long_attachment_like_text = (
+        "I wrote about keyboard PCB debugging and machining "
+        * 20
+        + "https:/i.imgur.com/example.jpeg"
+    )
+    export_path.write_text(f"body,attachment\nexample,{long_attachment_like_text}\n")
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path("Reddit/export/messages_archive.csv"),
+        source_family=SourceFamily.REDDIT_EXPORT,
+        source_family_subproduct="messages-archive",
+    )
+
+    assert parsed.source.metadata.get("attachment_count") == 1
+    assert parsed.attachments[0].resolved_path is None
+    assert "record 1" in parsed.text
+
+
 def test_parse_reddit_export_csv_uses_family_normalizer(tmp_path: Path) -> None:
     export_path = tmp_path / "comments.csv"
     export_path.write_text(
@@ -190,6 +371,36 @@ def test_parse_google_takeout_youtube_csv_uses_family_normalizer(tmp_path: Path)
     assert "channel: Disrupt" in parsed.text
     assert len(parsed.attachments) == 1
     assert parsed.attachments[0].reference == "http://www.youtube.com/channel/UC123"
+
+
+def test_parse_google_takeout_youtube_comment_reconstructs_segment_json(tmp_path: Path) -> None:
+    export_path = tmp_path / "comentarios.csv"
+    comment_json = json.dumps(
+        {
+            "takeoutSegments": [
+                {"text": "I fixed the parser with "},
+                {"text": "this reference", "link": {"linkUrl": "https://example.com/parser"}},
+            ]
+        }
+    )
+    export_path.write_text(
+        (
+            "ID de video,Título del video original,Texto del comentario\n"
+            f"abc123,Parser debugging,\"{comment_json.replace(chr(34), chr(34) + chr(34))}\"\n"
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path("Takeout/YouTube y YouTube Music/comentarios/comentarios.csv"),
+        source_family=SourceFamily.GOOGLE_TAKEOUT,
+        source_family_subproduct="youtube-and-youtube-music",
+    )
+
+    assert "video_url: https://www.youtube.com/watch?v=abc123" in parsed.text
+    assert "I fixed the parser with this reference" in parsed.text
+    assert any(attachment.reference == "https://www.youtube.com/watch?v=abc123" for attachment in parsed.attachments)
 
 
 def test_parse_google_takeout_profile_json_uses_family_normalizer(tmp_path: Path) -> None:
@@ -260,6 +471,7 @@ def test_parse_google_takeout_mbox_uses_family_normalizer(tmp_path: Path) -> Non
     message["To"] = "friend@example.com"
     message["Date"] = "Mon, 10 Nov 2025 17:01:52 +0100"
     message["Subject"] = "CCPA DELETE"
+    message["X-Gmail-Labels"] = "Sent"
     message.set_payload("Please delete my data.")
     mbox.add(message)
     mbox.flush()
@@ -276,6 +488,61 @@ def test_parse_google_takeout_mbox_uses_family_normalizer(tmp_path: Path) -> Non
     assert parsed.source.metadata["family_normalizer_record_count"] == 1
     assert "subject: CCPA DELETE" in parsed.text
     assert "Please delete my data." in parsed.text
+
+
+def test_parse_google_takeout_mbox_keeps_received_body_out_of_extraction_text(
+    tmp_path: Path,
+) -> None:
+    export_path = tmp_path / "all-mail.mbox"
+    mbox = mailbox.mbox(export_path)
+    message = mailbox.mboxMessage()
+    message["From"] = "newsletter@example.com"
+    message["To"] = "microck@example.com"
+    message["Date"] = "Mon, 10 Nov 2025 17:01:52 +0100"
+    message["Subject"] = "Weekly product newsletter"
+    message["X-Gmail-Labels"] = "Inbox"
+    message.set_payload("This long received newsletter should not become skill evidence.")
+    mbox.add(message)
+    mbox.flush()
+
+    parsed = parse_document(
+        export_path,
+        project_relative_path=Path("Takeout/Correo/Todo el correo, incluido Spam y Papelera.mbox"),
+        source_family=SourceFamily.GOOGLE_TAKEOUT,
+        source_family_subproduct="mail",
+    )
+
+    assert "subject: Weekly product newsletter" in parsed.text
+    assert "This long received newsletter" not in parsed.text
+
+
+def test_parse_google_takeout_photo_image_pairs_sidecar_and_attachment(tmp_path: Path) -> None:
+    image_path = tmp_path / "IMG_1234.jpg"
+    image_path.write_bytes(b"\xff\xd8\xff\xe0" + b"0" * 128)
+    image_path.with_name("IMG_1234.jpg.supplemental-metadata.json").write_text(
+        json.dumps(
+            {
+                "title": "Keyboard build photo",
+                "description": "Handwired keyboard prototype",
+                "photoTakenTime": {"timestamp": "1764547200"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    parsed = parse_document(
+        image_path,
+        project_relative_path=Path("Takeout/Google Fotos/Fotos del 2026/IMG_1234.jpg"),
+        source_family=SourceFamily.GOOGLE_TAKEOUT,
+        source_family_subproduct="google-photos",
+    )
+
+    assert parsed.source.source_type == SourceType.IMAGE
+    assert parsed.source.parser == "google-takeout-photo-image"
+    assert "Handwired keyboard prototype" in parsed.text
+    assert len(parsed.attachments) == 1
+    assert parsed.attachments[0].kind.value == "image"
+    assert parsed.attachments[0].resolved_path == image_path.resolve().as_posix()
 
 
 def test_ingestable_file_skips_known_binary_media_extensions(tmp_path: Path) -> None:

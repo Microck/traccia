@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import errno
 import gzip
 import json
 import os
 import shutil
+import sqlite3
+import threading
+import time
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,6 +24,7 @@ from traccia.models import (
     IngestMaterialStatus,
     IngestRunState,
     ParsedSpan,
+    PersonSkillStatus,
     ReliabilityTier,
     SignalClass,
     SourceFamily,
@@ -29,6 +34,7 @@ from traccia.pipeline import (
     Pipeline,
     _build_person_skill_state,
     _chunk_document,
+    _latest_evidence_at,
     _time_reference_to_datetime,
 )
 from traccia.rendering import _sanitize_export_text
@@ -110,7 +116,7 @@ def test_ingest_dir_builds_graph_and_artifacts(tmp_path: Path) -> None:
     assert any((tmp_path / "evidence").iterdir())
     assert (tmp_path / "tree" / "nodes" / "skill.python.md").exists()
     assert (tmp_path / "profile" / "skill.md").exists()
-    assert (tmp_path / "viewer" / "index.html").exists()
+    assert not (tmp_path / "viewer").exists()
     assert (tmp_path / "exports" / "debug" / "report.json").exists()
     assert (tmp_path / "exports" / "debug" / "report.md").exists()
     assert "ingest-dir" in (tmp_path / "tree" / "log.md").read_text()
@@ -131,6 +137,41 @@ def test_time_reference_to_datetime_accepts_reduced_precision_dates() -> None:
     assert month_precision == datetime(2024, 7, 1, tzinfo=UTC)
     assert year_precision == datetime(2024, 1, 1, tzinfo=UTC)
     assert unknown_day == datetime(2025, 3, 1, tzinfo=UTC)
+
+
+def test_evidence_timestamp_helpers_ignore_invalid_time_references() -> None:
+    evidence_items = [
+        EvidenceItem(
+            evidence_id="ev_bad_month",
+            source_id="src_bad_month",
+            quote="bad month should not break graph checkpoints",
+            evidence_type=EvidenceType.MENTIONED,
+            signal_class=SignalClass.AMBIENT_INTEREST,
+            confidence=0.7,
+            span_start=0,
+            span_end=10,
+            time_reference="2026-99-01",
+            skill_candidates=["date parsing"],
+            reliability=ReliabilityTier.TIER_B,
+            extractor_version="test",
+        ),
+        EvidenceItem(
+            evidence_id="ev_good",
+            source_id="src_good",
+            quote="valid timestamp should still be used",
+            evidence_type=EvidenceType.MENTIONED,
+            signal_class=SignalClass.AMBIENT_INTEREST,
+            confidence=0.7,
+            span_start=11,
+            span_end=20,
+            time_reference="2026-05-13",
+            skill_candidates=["date parsing"],
+            reliability=ReliabilityTier.TIER_B,
+            extractor_version="test",
+        ),
+    ]
+
+    assert _latest_evidence_at(evidence_items) == datetime(2026, 5, 13, tzinfo=UTC)
 
 
 def test_build_person_skill_state_clamps_backend_scores_to_unit_interval() -> None:
@@ -177,6 +218,47 @@ def test_build_person_skill_state_clamps_backend_scores_to_unit_interval() -> No
     assert state.depth_score == 1.0
     assert state.artifact_score == 1.0
     assert state.teaching_score == 0.0
+
+
+def test_build_person_skill_state_treats_freshness_status_as_active() -> None:
+    evidence = EvidenceItem(
+        evidence_id="ev_status_normalized",
+        source_id="src_status_normalized",
+        span_start=0,
+        span_end=12,
+        quote="I used it.",
+        evidence_type=EvidenceType.USED_TOOL,
+        signal_class=SignalClass.PROBLEM_SOLVING_TRACE,
+        skill_candidates=["CLI interaction"],
+        artifact_candidates=[],
+        time_reference="2026-04-01",
+        reliability=ReliabilityTier.TIER_B,
+        extractor_version="test",
+        confidence=0.8,
+    )
+    score_payload = ScorePayload(
+        level=1,
+        confidence=0.4,
+        recency_score=0.5,
+        breadth_score=0.5,
+        depth_score=0.5,
+        artifact_score=0.0,
+        teaching_score=0.0,
+        freshness="warming",
+        status="warming",
+        manual_note=None,
+        rationale="Backend confused freshness and status labels.",
+    )
+
+    state = _build_person_skill_state(
+        skill_id="skill.cli-interaction-libraries",
+        evidence_items=[evidence],
+        score_payload=score_payload,
+        previous_row=None,
+        locked=False,
+    )
+
+    assert state.status == PersonSkillStatus.ACTIVE
 
 
 def test_reingest_skips_unchanged_files(tmp_path: Path) -> None:
@@ -235,6 +317,56 @@ def test_review_accept_and_alias_add_update_query_surface(tmp_path: Path) -> Non
     assert "Redis" in tree_result.stdout
 
 
+def test_merge_project_imports_evidence_into_canonical_graph(tmp_path: Path) -> None:
+    runner = CliRunner()
+    target_root = tmp_path / "target"
+    source_root = tmp_path / "source"
+    initialize_repo(runner, target_root)
+    initialize_repo(runner, source_root)
+
+    target_corpus = tmp_path / "target-corpus"
+    source_corpus = tmp_path / "source-corpus"
+    target_corpus.mkdir()
+    source_corpus.mkdir()
+    (target_corpus / "python.md").write_text("I built a Python parser.\n")
+    (source_corpus / "sqlite.md").write_text("I designed the SQLite storage layer.\n")
+
+    target_result = runner.invoke(
+        app, ["ingest-dir", str(target_corpus), "--project-root", str(target_root)]
+    )
+    assert target_result.exit_code == 0, target_result.stdout
+    source_result = runner.invoke(
+        app, ["ingest-dir", str(source_corpus), "--project-root", str(source_root)]
+    )
+    assert source_result.exit_code == 0, source_result.stdout
+
+    merge_result = runner.invoke(
+        app, ["merge-project", str(source_root), "--project-root", str(target_root)]
+    )
+    assert merge_result.exit_code == 0, merge_result.stdout
+    assert "evidence_items=1" in merge_result.stdout
+    assert "rebuilt=true" in merge_result.stdout
+
+    graph = json.loads((target_root / "graph" / "graph.json").read_text())
+    node_names = {node["name"] for node in graph["nodes"]}
+    assert {"Python", "SQLite"} <= node_names
+
+    copied_evidence_files = list((target_root / "evidence").glob("*.json"))
+    assert len(copied_evidence_files) == 2
+
+    second_merge = runner.invoke(
+        app, ["merge-project", str(source_root), "--project-root", str(target_root), "--no-rebuild"]
+    )
+    assert second_merge.exit_code == 0, second_merge.stdout
+    assert "evidence_items=0" in second_merge.stdout
+
+    with sqlite3.connect(target_root / "state" / "catalog.sqlite") as connection:
+        checkpoint_count = connection.execute(
+            "select count(*) from extraction_checkpoints"
+        ).fetchone()[0]
+    assert checkpoint_count == 0
+
+
 def test_ingest_dir_retracts_deleted_sources_and_pending_reviews(tmp_path: Path) -> None:
     runner = CliRunner()
     initialize_repo(runner, tmp_path)
@@ -283,6 +415,84 @@ def test_ingest_dir_blocks_when_large_previous_root_suddenly_appears_empty(tmp_p
     assert run_state_paths
     run_state = json.loads(run_state_paths[0].read_text())
     assert run_state["total_materials"] == 30
+
+
+def test_resume_cached_materials_does_not_stat_every_cached_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "corpus"
+    corpus_root.mkdir()
+    first_path = corpus_root / "first.md"
+    second_path = corpus_root / "second.md"
+    first_path.write_text("I built Python automations.\n")
+    second_path.write_text("I debugged Redis deployments.\n")
+
+    pipeline = Pipeline(tmp_path)
+    previous_run_state = IngestRunState(
+        root_uri=corpus_root.resolve().as_uri(),
+        updated_at=datetime.now(tz=UTC),
+        total_materials=2,
+        materials=[
+            IngestManifestEntry(
+                relative_import_path="corpus/first.md",
+                source_path=first_path.as_posix(),
+                source_family=SourceFamily.GENERIC,
+                source_family_subproduct=None,
+                detection_reason="test",
+                status=IngestMaterialStatus.SKIPPED,
+                source_id="src_first",
+                source_sha256="abc",
+            ),
+            IngestManifestEntry(
+                relative_import_path="corpus/second.md",
+                source_path=second_path.as_posix(),
+                source_family=SourceFamily.GENERIC,
+                source_family_subproduct=None,
+                detection_reason="test",
+                status=IngestMaterialStatus.FAILED,
+                error="BackendError: quota",
+            ),
+        ],
+    )
+
+    def fail_on_stat(path: Path) -> int | None:
+        raise AssertionError(f"resume cache should not stat {path}")
+
+    monkeypatch.setattr("traccia.pipeline._safe_file_size", fail_on_stat)
+
+    materials = pipeline._resume_cached_materials(
+        root=corpus_root, previous_run_state=previous_run_state
+    )
+
+    assert materials is not None
+    assert [material.relative_import_path.as_posix() for material in materials] == [
+        "corpus/first.md",
+        "corpus/second.md",
+    ]
+
+
+def test_trusted_cached_resume_does_not_require_source_hash(tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+    pipeline = Pipeline(tmp_path)
+    entry = IngestManifestEntry(
+        relative_import_path="corpus/first.md",
+        source_path=(tmp_path / "corpus" / "first.md").as_posix(),
+        source_family=SourceFamily.GENERIC,
+        source_family_subproduct=None,
+        detection_reason="test",
+        status=IngestMaterialStatus.PROCESSED,
+        source_id="src_first",
+        source_sha256="abc",
+    )
+
+    monkeypatch.setattr(Pipeline, "_ingest_artifacts_complete", lambda self, source_id: True)
+
+    assert pipeline._can_trust_cached_material_resume(entry=entry, force=False)
+    assert not pipeline._can_trust_cached_material_resume(entry=entry, force=True)
 
 
 def test_old_evidence_marks_skill_historical(tmp_path: Path) -> None:
@@ -501,7 +711,10 @@ def test_resume_cache_filters_expanded_opencode_session_paths(tmp_path: Path) ->
         ],
     )
 
-    cached_materials = Pipeline(tmp_path)._resume_cached_materials(cached_state)
+    cached_materials = Pipeline(tmp_path)._resume_cached_materials(
+        root=corpus_root,
+        previous_run_state=cached_state,
+    )
 
     assert cached_materials is not None
     assert [material.relative_import_path.as_posix() for material in cached_materials] == [
@@ -840,6 +1053,107 @@ def test_discover_dir_excludes_low_signal_google_takeout_metadata_and_drive_arch
     assert payload["by_family_subproduct"]["google_takeout:youtube-and-youtube-music"] == 1
 
 
+def test_discover_dir_applies_google_takeout_relevance_policy(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "takeout-corpus"
+    takeout_root = corpus_root / "Takeout"
+    (takeout_root / "Drive").mkdir(parents=True)
+    (takeout_root / "Google Fotos" / "Fotos del 2026").mkdir(parents=True)
+    (takeout_root / "YouTube y YouTube Music" / "historial").mkdir(parents=True)
+    (takeout_root / "YouTube y YouTube Music" / "videos").mkdir(parents=True)
+
+    (takeout_root / "Drive" / "project-notes.md").write_text(
+        "I built an ingestion policy for Google Takeout.\n"
+    )
+    (takeout_root / "Drive" / "recording.psd").write_bytes(b"psd")
+    (takeout_root / "Google Fotos" / "Fotos del 2026" / "IMG_0001.jpg").write_bytes(
+        b"\xff\xd8\xff\xe0"
+    )
+    (
+        takeout_root
+        / "Google Fotos"
+        / "Fotos del 2026"
+        / "IMG_0001.jpg.supplemental-metadata.json"
+    ).write_text('{"description":"sidecar should be paired with the image"}\n')
+    (takeout_root / "Google Fotos" / "Fotos del 2026" / "IMG_0002.mp4").write_bytes(b"mp4")
+    (takeout_root / "YouTube y YouTube Music" / "historial" / "watch-history.json").write_text(
+        '[{"title":"Watched parser talk","titleUrl":"https://www.youtube.com/watch?v=abc"}]\n'
+    )
+    (takeout_root / "YouTube y YouTube Music" / "videos" / "raw-upload.mp4").write_bytes(b"mp4")
+
+    result = runner.invoke(
+        app,
+        ["discover-dir", str(corpus_root), "--project-root", str(tmp_path), "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["materials"] == 3
+    assert payload["by_family"] == {"google_takeout": 3}
+    assert payload["by_family_subproduct"]["google_takeout:drive"] == 1
+    assert payload["by_family_subproduct"]["google_takeout:google-photos"] == 1
+    assert payload["by_family_subproduct"]["google_takeout:youtube-and-youtube-music"] == 1
+
+
+def test_discover_dir_limits_google_photos_fast_vision_samples_per_folder(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    config = load_config(tmp_path / "config" / "config.yaml")
+    config.google_takeout.max_photo_vision_samples_per_folder = 2
+    write_config(tmp_path / "config" / "config.yaml", config)
+
+    corpus_root = tmp_path / "takeout-corpus"
+    photos_root = corpus_root / "Takeout" / "Google Fotos" / "Fotos del 2026"
+    photos_root.mkdir(parents=True)
+    for index in range(4):
+        (photos_root / f"IMG_{index:04d}.jpg").write_bytes(b"\xff\xd8\xff\xe0")
+
+    result = runner.invoke(
+        app,
+        ["discover-dir", str(corpus_root), "--project-root", str(tmp_path), "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["materials"] == 2
+    assert payload["by_family"] == {"google_takeout": 2}
+    assert payload["by_family_subproduct"] == {"google_takeout:google-photos": 2}
+
+
+def test_discover_dir_honors_google_takeout_relevance_config(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    config = load_config(tmp_path / "config" / "config.yaml")
+    config.google_takeout.photos_mode = "off"
+    config.google_takeout.drive_mode = "all"
+    write_config(tmp_path / "config" / "config.yaml", config)
+
+    corpus_root = tmp_path / "takeout-corpus"
+    takeout_root = corpus_root / "Takeout"
+    (takeout_root / "Drive").mkdir(parents=True)
+    (takeout_root / "Google Fotos" / "Fotos del 2026").mkdir(parents=True)
+    (takeout_root / "Drive" / "keyboard.kicad_pcb").write_text("(kicad_pcb (version 20240108))\n")
+    (takeout_root / "Google Fotos" / "Fotos del 2026" / "IMG_0001.jpg").write_bytes(
+        b"\xff\xd8\xff\xe0"
+    )
+
+    result = runner.invoke(
+        app,
+        ["discover-dir", str(corpus_root), "--project-root", str(tmp_path), "--format", "json"],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    payload = json.loads(result.stdout)
+    assert payload["materials"] == 1
+    assert payload["by_family_subproduct"] == {"google_takeout:drive": 1}
+
+
 def test_discover_dir_excludes_low_signal_discord_metadata_but_keeps_messages(
     tmp_path: Path,
 ) -> None:
@@ -941,6 +1255,46 @@ def test_ingest_dir_records_archive_family_and_member_in_manifest(tmp_path: Path
     assert metadata["family_normalizer"] == "twitter-ytd-js"
 
 
+def test_ingest_dir_shortens_only_local_raw_import_paths_for_long_archive_members(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "archive-corpus"
+    corpus_root.mkdir()
+    archive_path = corpus_root / "reddit-export.zip"
+    long_member_name = (
+        "messages/"
+        + "I wrote a long reply about keyboard PCBs, firmware debugging, and machining "
+        * 5
+        + "notes.txt"
+    )
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr(
+            long_member_name,
+            "I debugged keyboard firmware and machined custom keyboard parts.\n",
+        )
+
+    result = runner.invoke(app, ["ingest-dir", str(corpus_root), "--project-root", str(tmp_path)])
+
+    assert result.exit_code == 0, result.stdout
+    manifest = latest_manifest(tmp_path)
+    assert manifest["materials"][0]["status"] == "processed"
+    assert manifest["materials"][0]["archive_member"] == long_member_name
+
+    storage = Pipeline(tmp_path).storage
+    [source] = storage.list_sources()
+    metadata = json.loads(source["metadata_json"])
+    assert metadata["archive_member"] == long_member_name
+    assert metadata["relative_import_path"].endswith(long_member_name)
+    assert all(
+        len(path_part.encode("utf-8")) <= 160
+        for raw_path in (tmp_path / "raw" / "imported").rglob("*")
+        for path_part in raw_path.relative_to(tmp_path / "raw" / "imported").parts
+    )
+
+
 def test_ingest_dir_records_instagram_and_facebook_families_from_provider_roots(tmp_path: Path) -> None:
     runner = CliRunner()
     initialize_repo(runner, tmp_path)
@@ -992,6 +1346,57 @@ class ChunkRecordingBackend:
                 reliability=ReliabilityTier.TIER_B,
                 extractor_version="chunk-test",
                 confidence=0.9,
+            )
+        ]
+
+    def canonicalize(self, *, prompt: str, request):
+        return self.delegate.canonicalize(prompt=prompt, request=request)
+
+    def score_skill(self, *, prompt: str, request):
+        return self.delegate.score_skill(prompt=prompt, request=request)
+
+
+class EmptyExtractionBackend:
+    def __init__(self) -> None:
+        self.delegate = FakeLLMBackend()
+
+    def extract_evidence(self, *, prompt: str, document) -> list[EvidenceItem]:
+        del prompt, document
+        return []
+
+    def canonicalize(self, *, prompt: str, request):
+        return self.delegate.canonicalize(prompt=prompt, request=request)
+
+    def score_skill(self, *, prompt: str, request):
+        return self.delegate.score_skill(prompt=prompt, request=request)
+
+
+class RoleRecordingBackend:
+    def __init__(self) -> None:
+        self.delegate = FakeLLMBackend()
+        self.seen_headings: list[str | None] = []
+        self.seen_text = ""
+
+    def extract_evidence(self, *, prompt: str, document) -> list[EvidenceItem]:
+        del prompt
+        self.seen_headings = [span.heading for span in document.spans]
+        self.seen_text = document.text
+        span = document.spans[0]
+        return [
+            EvidenceItem(
+                evidence_id="role-trimmed",
+                source_id=document.source.source_id,
+                span_start=span.span_start,
+                span_end=span.span_end,
+                quote=span.text,
+                evidence_type=EvidenceType.IMPLEMENTED,
+                signal_class=SignalClass.PROBLEM_SOLVING_TRACE,
+                skill_candidates=["Python"],
+                artifact_candidates=["agent log"],
+                time_reference=document.source.ingested_at.isoformat(),
+                reliability=ReliabilityTier.TIER_C,
+                extractor_version="role-trim-test",
+                confidence=0.8,
             )
         ]
 
@@ -1186,6 +1591,22 @@ class CountingGraphBackend:
         return self.delegate.score_skill(prompt=prompt, request=request)
 
 
+class FailingCanonicalGraphBackend:
+    def __init__(self) -> None:
+        self.delegate = FakeLLMBackend()
+
+    def extract_evidence(self, *, prompt: str, document) -> list[EvidenceItem]:
+        return self.delegate.extract_evidence(prompt=prompt, document=document)
+
+    def canonicalize(self, *, prompt: str, request):
+        del prompt, request
+        raise BackendError("request exceeded 180s wall-clock timeout")
+
+    def score_skill(self, *, prompt: str, request):
+        del prompt, request
+        raise AssertionError("scoring should not run when canonicalization fails")
+
+
 class ProgressiveGraphBackend:
     def __init__(self) -> None:
         self.delegate = FakeLLMBackend()
@@ -1253,6 +1674,67 @@ class ProgressiveGraphBackend:
         )
 
 
+class ParallelScoreRecordingBackend:
+    def __init__(self) -> None:
+        self.delegate = FakeLLMBackend()
+        self.active_scores = 0
+        self.max_active_scores = 0
+        self.score_calls = 0
+        self.lock = threading.Lock()
+
+    def extract_evidence(self, *, prompt: str, document) -> list[EvidenceItem]:
+        del prompt
+        span = document.spans[0]
+        text = document.text.lower()
+        if "sqlite" in text:
+            skill = "SQLite"
+        elif "rust" in text:
+            skill = "Rust"
+        elif "blender" in text:
+            skill = "Blender"
+        else:
+            skill = "Python"
+        return [
+            EvidenceItem(
+                evidence_id=f"{document.source.source_id}-{skill.lower()}",
+                source_id=document.source.source_id,
+                span_start=span.span_start,
+                span_end=span.span_end,
+                quote=span.text,
+                evidence_type=EvidenceType.IMPLEMENTED,
+                signal_class=SignalClass.ARTIFACT_BACKED_WORK,
+                skill_candidates=[skill],
+                artifact_candidates=[],
+                time_reference=document.source.ingested_at.isoformat(),
+                reliability=ReliabilityTier.TIER_B,
+                extractor_version="parallel-score-test",
+                confidence=0.9,
+            )
+        ]
+
+    def canonicalize(self, *, prompt: str, request):
+        del prompt
+        return CanonicalSkillDecision(
+            candidate_name=request.candidate_name,
+            action="create",
+            canonical_name=request.candidate_name,
+            skill_id=None,
+            reason="Strong evidence for direct creation.",
+        )
+
+    def score_skill(self, *, prompt: str, request):
+        with self.lock:
+            self.score_calls += 1
+            self.active_scores += 1
+            self.max_active_scores = max(self.max_active_scores, self.active_scores)
+        try:
+            time.sleep(0.05)
+            return self.delegate.score_skill(prompt=prompt, request=request)
+        finally:
+            with self.lock:
+                self.active_scores -= 1
+
+
 class DomainReuseBackend:
     def __init__(self) -> None:
         self.delegate = FakeLLMBackend()
@@ -1317,15 +1799,344 @@ class CheckpointRecordingPipeline(Pipeline):
         completed: int,
         total_materials: int,
         graph_progress_callback=None,
+        score_mode: str = "incremental",
     ) -> None:
-        del root, manifest_entries, completed, total_materials, graph_progress_callback
+        del root, manifest_entries, completed, total_materials, graph_progress_callback, score_mode
         self.graph_checkpoint_calls += 1
+
+
+class EioOncePipeline(Pipeline):
+    def __init__(self, project_root: Path) -> None:
+        super().__init__(project_root)
+        self.material_attempts = 0
+
+    def _ingest_material(self, *args, **kwargs):
+        self.material_attempts += 1
+        if self.material_attempts == 1:
+            raise OSError(errno.EIO, "Input/output error")
+        return super()._ingest_material(*args, **kwargs)
 
 
 class ForbiddenExtractionBackend:
     def extract_evidence(self, *, prompt: str, document) -> list[EvidenceItem]:
         del prompt, document
         raise AssertionError("LLM extraction should have been skipped")
+
+
+def test_stage_dir_prepares_materials_without_llm_or_graph_sync(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "stage-corpus"
+    corpus_root.mkdir()
+    source_path = corpus_root / "one.txt"
+    source_path.write_text("I built a Python parser.\n")
+
+    pipeline = Pipeline(tmp_path)
+    pipeline.backend = ForbiddenExtractionBackend()
+
+    result = pipeline.ingest_directory(corpus_root, extract=False, sync_graph=False)
+
+    source_id = source_id_for_relative_path(Path("stage-corpus") / "one.txt")
+    assert result.prepared == 1
+    assert result.processed == 0
+    assert pipeline.storage.fetch_source(source_id) is not None
+    assert (tmp_path / "parsed" / f"{source_id}.json").exists()
+    assert not (tmp_path / "evidence" / f"{source_id}.json").exists()
+    assert pipeline.storage.list_source_evidence(source_id) == []
+    progress = json.loads((tmp_path / "state" / "progress.json").read_text())
+    assert progress["phase"] == "graph_sync_deferred"
+    assert progress["materials"]["seen_this_scan"] == 1
+    assert progress["materials"]["already_tracked"] == 0
+    assert progress["materials"]["new_to_run_state"] == 1
+
+
+def test_score_command_and_ingest_score_mode_none(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "score-command-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "notes.md").write_text("I built a Python parser.\n")
+
+    ingest_result = runner.invoke(
+        app,
+        [
+            "ingest-dir",
+            str(corpus_root),
+            "--project-root",
+            str(tmp_path),
+            "--score-mode",
+            "none",
+        ],
+    )
+
+    assert ingest_result.exit_code == 0, ingest_result.stdout
+    assert "graph_sync=false" in ingest_result.stdout
+    assert "score_mode=none" in ingest_result.stdout
+
+    score_result = runner.invoke(
+        app,
+        ["score", "--project-root", str(tmp_path), "--mode", "incremental"],
+    )
+
+    assert score_result.exit_code == 0, score_result.stdout
+    assert "scored=incremental" in score_result.stdout
+
+
+def test_parallel_skill_scoring_preserves_stable_skill_states(tmp_path: Path) -> None:
+    runner = CliRunner()
+    serial_root = tmp_path / "serial"
+    parallel_root = tmp_path / "parallel"
+    initialize_repo(runner, serial_root)
+    initialize_repo(runner, parallel_root)
+
+    corpus_root = tmp_path / "parallel-score-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "python.txt").write_text("I implemented a Python parser.\n")
+    (corpus_root / "sqlite.txt").write_text("I implemented a SQLite migration.\n")
+    (corpus_root / "rust.txt").write_text("I implemented a Rust command-line tool.\n")
+
+    def run(root: Path, *, parallel_scores: int) -> tuple[ParallelScoreRecordingBackend, dict]:
+        pipeline = Pipeline(root)
+        backend = ParallelScoreRecordingBackend()
+        pipeline.backend = backend
+        pipeline.ingest_directory(corpus_root, sync_graph=False)
+        pipeline.recompute_graph(parallel_scores=parallel_scores)
+        stable_rows = {}
+        for row in pipeline.storage.list_skill_rows():
+            if row["kind"] != "skill":
+                continue
+            stable_rows[row["skill_id"]] = {
+                "name": row["name"],
+                "level": row["level"],
+                "xp": row["xp"],
+                "state_confidence": row["state_confidence"],
+                "breadth_score": row["breadth_score"],
+                "depth_score": row["depth_score"],
+                "artifact_score": row["artifact_score"],
+                "teaching_score": row["teaching_score"],
+                "freshness": row["freshness"],
+                "state_status": row["state_status"],
+            }
+        return backend, stable_rows
+
+    serial_backend, serial_rows = run(serial_root, parallel_scores=1)
+    parallel_backend, parallel_rows = run(parallel_root, parallel_scores=3)
+
+    assert serial_backend.max_active_scores == 1
+    assert parallel_backend.max_active_scores > 1
+    assert parallel_backend.score_calls == serial_backend.score_calls
+    assert parallel_rows == serial_rows
+
+
+def test_stage_dir_resumes_prepared_materials_without_reextracting(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "stage-resume-corpus"
+    corpus_root.mkdir()
+    source_path = corpus_root / "one.txt"
+    source_path.write_text("I built a Python parser.\n")
+
+    first_pipeline = Pipeline(tmp_path)
+    first_pipeline.backend = ForbiddenExtractionBackend()
+    first_result = first_pipeline.ingest_directory(corpus_root, extract=False, sync_graph=False)
+    assert first_result.prepared == 1
+
+    second_pipeline = Pipeline(tmp_path)
+    second_pipeline.backend = ForbiddenExtractionBackend()
+    second_result = second_pipeline.ingest_directory(corpus_root, extract=False, sync_graph=False)
+
+    run_state = second_pipeline._load_ingest_run_state(corpus_root)
+    assert second_result.prepared == 0
+    assert second_result.skipped == 1
+    assert run_state is not None
+    assert [entry.status for entry in run_state.materials] == [IngestMaterialStatus.PREPARED]
+    progress = json.loads((tmp_path / "state" / "progress.json").read_text())
+    assert progress["materials"]["already_tracked"] == 1
+    assert progress["materials"]["new_to_run_state"] == 0
+
+
+def test_full_ingest_extracts_prepared_materials(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "stage-to-ingest-corpus"
+    corpus_root.mkdir()
+    source_path = corpus_root / "one.txt"
+    source_path.write_text("I built a Python parser.\n")
+
+    staging_pipeline = Pipeline(tmp_path)
+    staging_pipeline.backend = ForbiddenExtractionBackend()
+    staging_result = staging_pipeline.ingest_directory(
+        corpus_root,
+        extract=False,
+        sync_graph=False,
+    )
+    assert staging_result.prepared == 1
+
+    ingest_pipeline = Pipeline(tmp_path)
+    ingest_pipeline.backend = FakeLLMBackend()
+    ingest_result = ingest_pipeline.ingest_directory(corpus_root)
+
+    source_id = source_id_for_relative_path(Path("stage-to-ingest-corpus") / "one.txt")
+    assert ingest_result.processed == 1
+    assert (tmp_path / "evidence" / f"{source_id}.json").exists()
+    assert len(ingest_pipeline.storage.list_source_evidence(source_id)) >= 1
+
+
+def test_ingest_dir_cli_can_defer_graph_and_deletion_sync(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "deferred-graph-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "one.txt").write_text("I built a Python parser.\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "ingest-dir",
+            str(corpus_root),
+            "--project-root",
+            str(tmp_path),
+            "--no-sync-graph",
+            "--no-sync-deletions",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "processed=1" in result.stdout
+    assert "graph_sync=false" in result.stdout
+    assert "deletion_sync=false" in result.stdout
+    assert (tmp_path / "evidence").exists()
+    assert "Python" not in (tmp_path / "tree" / "index.md").read_text()
+
+
+def test_ingest_dir_cli_rejects_invalid_parallel_extractions(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "invalid-parallel-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "one.txt").write_text("I built a Python parser.\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "ingest-dir",
+            str(corpus_root),
+            "--project-root",
+            str(tmp_path),
+            "--parallel-extractions",
+            "0",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "parallel-extractions" in result.output
+
+
+def test_ingest_dir_parallel_extractions_preserve_results(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "parallel-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "one.txt").write_text("I built a Python parser.\n")
+    (corpus_root / "two.txt").write_text("I debugged a SQLite migration.\n")
+    (corpus_root / "three.txt").write_text("I shipped a Rust command-line tool.\n")
+
+    result = runner.invoke(
+        app,
+        [
+            "ingest-dir",
+            str(corpus_root),
+            "--project-root",
+            str(tmp_path),
+            "--parallel-extractions",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    assert "processed=3" in result.stdout
+
+    pipeline = Pipeline(tmp_path)
+    assert len(pipeline.storage.list_sources()) == 3
+    assert len(pipeline.storage.list_evidence()) >= 3
+    graph = json.loads((tmp_path / "graph" / "graph.json").read_text())
+    node_names = {node["name"] for node in graph["nodes"]}
+    assert {"Python", "SQLite"}.issubset(node_names)
+    assert "material-batch-start" in (tmp_path / "tree" / "log.md").read_text()
+
+
+def test_ingest_dir_import_prefix_keeps_targeted_roots_distinct(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    account_one = tmp_path / "account-one" / "extracted" / "Takeout"
+    account_two = tmp_path / "account-two" / "extracted" / "Takeout"
+    account_one.mkdir(parents=True)
+    account_two.mkdir(parents=True)
+    (account_one / "notes.txt").write_text("I built a Python parser for account one.\n")
+    (account_two / "notes.txt").write_text("I built a Rust parser for account two.\n")
+
+    pipeline = Pipeline(tmp_path)
+    pipeline.backend = FakeLLMBackend()
+    first_result = pipeline.ingest_directory(
+        account_one,
+        import_prefix=Path("takeout-account-one"),
+        sync_graph=False,
+        sync_deletions=False,
+    )
+    second_result = pipeline.ingest_directory(
+        account_two,
+        import_prefix=Path("takeout-account-two"),
+        sync_graph=False,
+        sync_deletions=False,
+    )
+
+    assert first_result.processed == 1
+    assert second_result.processed == 1
+    source_ids = {row["source_id"] for row in pipeline.storage.list_sources()}
+    assert source_id_for_relative_path(Path("takeout-account-one/notes.txt")) in source_ids
+    assert source_id_for_relative_path(Path("takeout-account-two/notes.txt")) in source_ids
+    assert source_id_for_relative_path(Path("takeout/notes.txt")) not in source_ids
+
+
+def test_stage_dir_trusts_existing_parsed_sources_without_revalidation(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "stage-existing-corpus"
+    corpus_root.mkdir()
+    source_path = corpus_root / "one.txt"
+    source_path.write_text("I built a Python parser.\n")
+
+    ingest_pipeline = Pipeline(tmp_path)
+    ingest_pipeline.backend = FakeLLMBackend()
+    ingest_result = ingest_pipeline.ingest_directory(corpus_root)
+    assert ingest_result.processed == 1
+
+    source_id = source_id_for_relative_path(Path("stage-existing-corpus") / "one.txt")
+    existing_evidence = ingest_pipeline.storage.list_source_evidence(source_id)
+    assert existing_evidence
+
+    source_path.write_text("I changed this file after the full ingest.\n")
+    staging_pipeline = Pipeline(tmp_path)
+    staging_pipeline.backend = ForbiddenExtractionBackend()
+    staging_result = staging_pipeline.ingest_directory(
+        corpus_root,
+        extract=False,
+        sync_graph=False,
+        sync_deletions=False,
+    )
+
+    assert staging_result.prepared == 0
+    assert staging_result.skipped == 1
+    assert staging_pipeline.storage.list_source_evidence(source_id) == existing_evidence
 
 
 def test_ingest_file_chunks_large_documents_and_normalizes_evidence_ids(tmp_path: Path) -> None:
@@ -1338,7 +2149,7 @@ def test_ingest_file_chunks_large_documents_and_normalizes_evidence_ids(tmp_path
     large_file.write_text(
         "\n\n".join(
             f"I built a Python ingestion component number {index} and debugged its parser."
-            for index in range(150)
+            for index in range(300)
         )
         + "\n"
     )
@@ -1400,7 +2211,7 @@ def test_ingest_file_resumes_from_completed_chunk_checkpoints(tmp_path: Path) ->
     source_path.write_text(
         "\n\n".join(
             f"I built Python ingestion chunk {index} and debugged parser section {index}."
-            for index in range(140)
+            for index in range(500)
         )
         + "\n"
     )
@@ -1493,7 +2304,7 @@ def test_ingest_dir_fast_resumes_completed_materials_after_quota_stop(tmp_path: 
     else:
         raise AssertionError("expected first ingest to stop on quota")
 
-    second_pipeline = Pipeline(tmp_path)
+    second_pipeline = ProgressRecordingPipeline(tmp_path)
     second_backend = FailOnNthChunkBackend(fail_on_call=999)
     second_pipeline.backend = second_backend
 
@@ -1508,6 +2319,61 @@ def test_ingest_dir_fast_resumes_completed_materials_after_quota_stop(tmp_path: 
     assert progress["status"] == "completed"
     assert progress["resume"]["completed_before_run"] == 1
     assert progress["progress"]["completed"] == 3
+    second_material_starts = [
+        payload
+        for payload in second_pipeline.progress_payloads
+        if payload.get("status") == "running"
+        and payload.get("current_index") == 2
+        and payload.get("current_chunk_total") is None
+        and payload.get("phase") is None
+    ]
+    assert second_material_starts
+    assert all(payload["resume_revalidated"] == 1 for payload in second_material_starts)
+
+
+def test_ingest_dir_rediscovers_when_resume_cache_points_at_stale_imports(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "cache-corpus"
+    corpus_root.mkdir()
+    source_path = corpus_root / "one.txt"
+    source_path.write_text("I built a Python parser.\n")
+
+    pipeline = Pipeline(tmp_path)
+    stale_import_path = tmp_path / "raw" / "imported" / "cache-corpus" / "one.txt"
+    run_state = IngestRunState(
+        root_uri=corpus_root.resolve().as_uri(),
+        updated_at=datetime.now(tz=UTC),
+        total_materials=1,
+        materials=[
+            IngestManifestEntry(
+                relative_import_path="cache-corpus/one.txt",
+                source_path=stale_import_path.as_posix(),
+                source_family=SourceFamily.GENERIC,
+                source_family_subproduct=None,
+                detection_reason="test stale cache entry",
+                status=IngestMaterialStatus.FAILED,
+                error="FileNotFoundError: stale raw/imported path",
+            )
+        ],
+    )
+    state_path = pipeline._ingest_run_state_path(corpus_root)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(run_state.model_dump_json(indent=2) + "\n")
+
+    result = pipeline.ingest_directory(corpus_root)
+
+    assert result.failed == 0
+    assert result.processed == 1
+    assert result.skipped == 0
+
+    resumed_state = IngestRunState.model_validate_json(state_path.read_text())
+    assert len(resumed_state.materials) == 1
+    assert resumed_state.materials[0].source_path == source_path.as_posix()
+    assert "ingest-discovery-cache-invalidated" in (tmp_path / "tree" / "log.md").read_text()
 
 
 def test_ingest_dir_marks_progress_as_discovering_before_processing(tmp_path: Path) -> None:
@@ -1764,6 +2630,85 @@ def test_parse_document_discovers_twitter_archive_media_attachment(tmp_path: Pat
     assert attachment.resolved_path == image_path.resolve().as_posix()
 
 
+def test_ingest_dir_delays_image_attached_material_without_vision_backend(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    config = load_config(tmp_path / "config" / "config.yaml")
+    config.multimodal.enable_local_image_ocr = False
+    config.multimodal.enable_vision = False
+    config.backend.supports_vision = False
+    write_config(tmp_path / "config" / "config.yaml", config)
+
+    corpus_root = tmp_path / "vision-corpus"
+    image_path = corpus_root / "preview.jpg"
+    html_path = corpus_root / "post.html"
+    corpus_root.mkdir()
+    image_path.write_bytes(b"jpeg-bytes")
+    html_path.write_text(
+        '<html><body><p>I built a Python parser.</p><img src="preview.jpg" alt="parser screenshot" /></body></html>\n'
+    )
+
+    result = runner.invoke(app, ["ingest-dir", str(corpus_root), "--project-root", str(tmp_path)])
+
+    assert result.exit_code == 0, result.stdout
+    assert "delayed=1" in result.stdout
+    manifest = latest_manifest(tmp_path)
+    assert manifest["materials"][0]["status"] == "delayed"
+    assert "vision-capable backend" in manifest["materials"][0]["error"]
+
+    progress = json.loads((tmp_path / "state" / "progress.json").read_text())
+    assert progress["counts"]["delayed"] == 1
+
+    source_id = manifest["materials"][0]["source_id"]
+    assert source_id
+    assert (tmp_path / "parsed" / f"{source_id}.json").exists()
+    assert not (tmp_path / "evidence" / f"{source_id}.json").exists()
+
+
+def test_delayed_image_attached_material_processes_when_vision_is_enabled(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    config = load_config(tmp_path / "config" / "config.yaml")
+    config.multimodal.enable_local_image_ocr = False
+    config.multimodal.enable_vision = False
+    config.backend.supports_vision = False
+    write_config(tmp_path / "config" / "config.yaml", config)
+
+    corpus_root = tmp_path / "vision-corpus"
+    image_path = corpus_root / "preview.jpg"
+    html_path = corpus_root / "post.html"
+    corpus_root.mkdir()
+    image_path.write_bytes(b"jpeg-bytes")
+    html_path.write_text(
+        '<html><body><p>I built a Python parser.</p><img src="preview.jpg" alt="parser screenshot" /></body></html>\n'
+    )
+
+    first_result = runner.invoke(
+        app, ["ingest-dir", str(corpus_root), "--project-root", str(tmp_path)]
+    )
+    assert first_result.exit_code == 0, first_result.stdout
+    assert "delayed=1" in first_result.stdout
+
+    config.multimodal.enable_vision = True
+    config.backend.supports_vision = True
+    write_config(tmp_path / "config" / "config.yaml", config)
+
+    second_result = runner.invoke(
+        app, ["ingest-dir", str(corpus_root), "--project-root", str(tmp_path)]
+    )
+
+    assert second_result.exit_code == 0, second_result.stdout
+    assert "processed=1" in second_result.stdout
+    assert "delayed=0" in second_result.stdout
+    manifest = latest_manifest(tmp_path)
+    assert manifest["materials"][0]["status"] == "processed"
+    source_id = manifest["materials"][0]["source_id"]
+    assert source_id
+    assert (tmp_path / "evidence" / f"{source_id}.json").exists()
+
+
 def test_chunk_document_splits_oversized_single_span(tmp_path: Path) -> None:
     runner = CliRunner()
     initialize_repo(runner, tmp_path)
@@ -1807,7 +2752,7 @@ def test_chunk_document_does_not_over_split_dense_structured_exports(tmp_path: P
     assert len(parsed_document.spans) > 100
     chunks = _chunk_document(parsed_document)
 
-    assert len(chunks) <= 10
+    assert len(chunks) == 1
     assert all(sum(len(span.text) for span in chunk.spans) <= 12000 for chunk in chunks)
 
 
@@ -1821,7 +2766,7 @@ def test_ingest_dir_writes_chunk_progress_heartbeats_for_large_materials(tmp_pat
     large_file.write_text(
         "\n\n".join(
             f"I built a Python ingestion component number {index} and debugged its parser."
-            for index in range(150)
+            for index in range(300)
         )
         + "\n"
     )
@@ -1856,8 +2801,63 @@ def test_ingest_dir_writes_graph_phase_progress_heartbeats(tmp_path: Path) -> No
 
     assert result.processed == 1
     phases = [payload.get("phase") for payload in pipeline.progress_payloads]
-    assert "graph_checkpoint" in phases
+    assert "graph_checkpoint" not in phases
     assert "graph_sync" in phases
+
+
+def test_ingest_dir_skips_live_graph_checkpoint_when_no_evidence_is_extracted(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "empty-evidence-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "notes.md").write_text("ambient note without actionable skill evidence\n")
+
+    pipeline = CheckpointRecordingPipeline(tmp_path)
+    pipeline.backend = EmptyExtractionBackend()
+
+    result = pipeline.ingest_directory(corpus_root)
+
+    assert result.processed == 1
+    assert pipeline.graph_checkpoint_calls == 0
+
+
+def test_ingest_dir_trims_non_user_agent_log_spans_before_llm_extraction(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "agent-logs"
+    corpus_root.mkdir()
+    (corpus_root / "session.md").write_text(
+        "\n".join(
+            [
+                "User: I built a Python parser.",
+                "",
+                "Assistant: I implemented Rust internals.",
+                "",
+                "Thinking: I should inspect private chain of thought.",
+                "",
+                "Tool: pytest output mentions SQLite.",
+            ]
+        )
+    )
+
+    backend = RoleRecordingBackend()
+    pipeline = Pipeline(tmp_path)
+    pipeline.backend = backend
+
+    result = pipeline.ingest_directory(corpus_root)
+
+    assert result.processed == 1
+    assert backend.seen_headings == ["user"]
+    assert "User: I built a Python parser." in backend.seen_text
+    assert "Assistant:" not in backend.seen_text
+    assert "Thinking:" not in backend.seen_text
+    assert "Tool:" not in backend.seen_text
 
 
 def test_ingest_dir_writes_graph_candidate_progress_heartbeats(tmp_path: Path) -> None:
@@ -1957,6 +2957,80 @@ def test_recompute_graph_reuses_cached_candidate_decisions(tmp_path: Path) -> No
     assert backend.score_calls == first_score_calls
 
 
+def test_recompute_graph_full_mode_bypasses_scoring_caches(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "full-score-cache-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "report.md").write_text("I built a Python reporting dashboard.\n")
+
+    pipeline = Pipeline(tmp_path)
+    backend = CountingGraphBackend()
+    pipeline.backend = backend
+
+    result = pipeline.ingest_directory(corpus_root)
+
+    assert result.processed == 1
+    first_canonicalize_calls = backend.canonicalize_calls
+    first_score_calls = backend.score_calls
+
+    pipeline.recompute_graph(score_mode="full")
+
+    assert backend.canonicalize_calls > first_canonicalize_calls
+    assert backend.score_calls > first_score_calls
+
+
+def test_recompute_graph_incremental_scores_changed_skill_once(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "incremental-score-corpus"
+    corpus_root.mkdir()
+    first_path = corpus_root / "first.md"
+    first_path.write_text("I built a Python parser.\n")
+
+    pipeline = Pipeline(tmp_path)
+    backend = CountingGraphBackend()
+    pipeline.backend = backend
+
+    result = pipeline.ingest_directory(corpus_root)
+
+    assert result.processed == 1
+    backend.canonicalize_calls = 0
+    backend.score_calls = 0
+
+    second_path = corpus_root / "second.md"
+    second_path.write_text("I implemented Python packaging automation.\n")
+    pipeline.ingest_file(second_path, root=corpus_root)
+    pipeline.recompute_graph(score_mode="incremental")
+
+    assert backend.canonicalize_calls == 1
+    assert backend.score_calls == 1
+
+
+def test_recompute_graph_continues_when_candidate_canonicalization_fails(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "canonicalization-timeout-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "notes.md").write_text("I built a Python reporting dashboard.\n")
+
+    pipeline = Pipeline(tmp_path)
+    pipeline.backend = FailingCanonicalGraphBackend()
+
+    result = pipeline.ingest_directory(corpus_root)
+
+    assert result.processed == 1
+    review_items = pipeline.storage.list_review_items()
+    assert len(review_items) == 1
+    assert "Canonicalization backend failed" in review_items[0]["reason"]
+    assert pipeline.storage.list_graph_candidate_cache_rows() == []
+
+
 def test_recompute_graph_emits_progressive_checkpoints(tmp_path: Path) -> None:
     runner = CliRunner()
     initialize_repo(runner, tmp_path)
@@ -1976,6 +3050,54 @@ def test_recompute_graph_emits_progressive_checkpoints(tmp_path: Path) -> None:
     pipeline.recompute_graph(checkpoint_callback=lambda: checkpoint_calls.append("checkpoint"))
 
     assert len(checkpoint_calls) >= 2
+
+
+def test_recompute_graph_saves_run_data(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "graph-run-data-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "notes.md").write_text("I built a Python data tool and designed its SQLite storage.\n")
+
+    pipeline = Pipeline(tmp_path)
+    pipeline.backend = ProgressiveGraphBackend()
+    pipeline.ingest_directory(corpus_root)
+
+    runs_path = tmp_path / "state" / "graph-score-runs.jsonl"
+    before_count = len(runs_path.read_text().splitlines()) if runs_path.exists() else 0
+
+    pipeline.recompute_graph(score_mode="incremental")
+
+    run_events = [
+        json.loads(line)
+        for line in runs_path.read_text().splitlines()[before_count:]
+    ]
+    assert run_events[0]["event"] == "started"
+    assert run_events[-1]["event"] == "completed"
+    assert run_events[-1]["status"] == "complete"
+    assert run_events[-1]["model"] == "gpt-5-chat-latest"
+    assert {event["run_id"] for event in run_events} == {run_events[0]["run_id"]}
+    assert all("candidate_name" not in event for event in run_events)
+    assert all("skill_name" not in event for event in run_events)
+
+    connection = sqlite3.connect(tmp_path / "state" / "catalog.sqlite")
+    connection.row_factory = sqlite3.Row
+    try:
+        row = connection.execute(
+            "select * from pipeline_runs where run_id = ?",
+            (run_events[0]["run_id"],),
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert row is not None
+    assert row["step_name"] == "graph-score"
+    assert row["status"] == "complete"
+    details = json.loads(row["details_json"])
+    assert details["score_mode"] == "incremental"
+    assert details["candidate_total"] == 2
+    assert details["skill_total"] == 2
 
 
 def test_recompute_graph_reuses_existing_domain_skill_id(tmp_path: Path) -> None:
@@ -2002,9 +3124,31 @@ def test_recompute_graph_reuses_existing_domain_skill_id(tmp_path: Path) -> None
     assert "skill:data" not in skill_rows
 
 
-def test_ingest_dir_refreshes_live_graph_before_completion(tmp_path: Path) -> None:
+def test_ingest_dir_skips_live_graph_checkpoint_by_default(tmp_path: Path) -> None:
     runner = CliRunner()
     initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "checkpoint-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "notes.md").write_text("I built a Python parser and debugged the release flow.\n")
+
+    pipeline = CheckpointRecordingPipeline(tmp_path)
+    pipeline.backend = FakeLLMBackend()
+
+    result = pipeline.ingest_directory(corpus_root)
+
+    assert result.processed == 1
+    assert pipeline.graph_checkpoint_calls == 0
+
+
+def test_ingest_dir_refreshes_live_graph_before_completion_when_enabled(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+    config = load_config(tmp_path / "config" / "config.yaml")
+    config.graph_refresh.live_checkpoints_enabled = True
+    write_config(tmp_path / "config" / "config.yaml", config)
 
     corpus_root = tmp_path / "checkpoint-corpus"
     corpus_root.mkdir()
@@ -2023,6 +3167,7 @@ def test_ingest_dir_batches_live_graph_refreshes_for_large_runs(tmp_path: Path) 
     runner = CliRunner()
     initialize_repo(runner, tmp_path)
     config = load_config(tmp_path / "config" / "config.yaml")
+    config.graph_refresh.live_checkpoints_enabled = True
     config.graph_refresh.live_checkpoint_material_interval = 3
     config.graph_refresh.live_checkpoint_min_interval_seconds = 0.0
     config.graph_refresh.small_run_live_checkpoint_material_limit = 0
@@ -2180,7 +3325,9 @@ def test_ingest_dir_stops_when_source_material_is_unavailable(tmp_path: Path) ->
     assert progress["counts"]["failed"] == 1
 
 
-def test_ingest_dir_stops_when_backend_returns_invalid_structured_json(tmp_path: Path) -> None:
+def test_ingest_dir_continues_when_one_material_gets_invalid_structured_json(
+    tmp_path: Path,
+) -> None:
     runner = CliRunner()
     initialize_repo(runner, tmp_path)
 
@@ -2194,22 +3341,36 @@ def test_ingest_dir_stops_when_backend_returns_invalid_structured_json(tmp_path:
     backend = StopOnStructuredValidationBackend(fail_on_call=2)
     pipeline.backend = backend
 
-    try:
-        pipeline.ingest_directory(corpus_root)
-    except RuntimeError as exc:
-        assert "Ingest stopped because the LLM backend is unavailable" in str(exc)
-        assert "Structured response validation failed" in str(exc)
-    else:
-        raise AssertionError("expected ingest to stop on malformed structured backend output")
+    result = pipeline.ingest_directory(corpus_root)
 
     progress = json.loads((tmp_path / "state" / "progress.json").read_text())
-    assert progress["status"] == "blocked"
-    assert "Structured response validation failed" in progress["blocked_reason"]
-    assert progress["counts"]["processed"] == 1
-    assert progress["counts"]["failed"] == 1
-    assert progress["progress"]["completed"] == 2
+    assert result.processed == 3
+    assert result.failed == 0
+    assert progress["status"] == "completed"
+    assert "blocked_reason" not in progress
+    assert progress["counts"]["processed"] == 3
+    assert progress["counts"]["failed"] == 0
+    assert progress["progress"]["completed"] == 3
     assert progress["progress"]["total"] == 3
-    assert backend.call_count == 2
+    assert backend.call_count == 3
+    assert "extraction-chunk-skipped" in (tmp_path / "tree" / "log.md").read_text()
+
+
+def test_ingest_dir_retries_transient_fuse_eio(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    corpus_root = tmp_path / "eio-corpus"
+    corpus_root.mkdir()
+    (corpus_root / "one.txt").write_text("I built a Python parser.\n")
+
+    pipeline = EioOncePipeline(tmp_path)
+    result = pipeline.ingest_directory(corpus_root)
+
+    assert result.processed == 1
+    assert result.failed == 0
+    assert pipeline.material_attempts == 2
+    assert "material-retry" in (tmp_path / "tree" / "log.md").read_text()
 
 
 def test_ingest_dir_writes_blocked_progress_before_retrying_graph_on_material_cooldown(tmp_path: Path) -> None:
@@ -2310,3 +3471,36 @@ def test_replace_source_spans_deduplicates_duplicate_span_ids(tmp_path: Path) ->
     assert len(rows) == 2
     assert rows[0]["span_id"] == "span_duplicate"
     assert rows[1]["span_id"].startswith("span_duplicate::")
+
+
+def test_replace_source_spans_deduplicates_span_ids_across_sources(tmp_path: Path) -> None:
+    runner = CliRunner()
+    initialize_repo(runner, tmp_path)
+
+    pipeline = Pipeline(tmp_path)
+    for source_id in ("src_one", "src_two"):
+        pipeline.storage.replace_source_spans(
+            source_id,
+            [
+                ParsedSpan(
+                    span_id="span_collision",
+                    source_id=source_id,
+                    segment_kind="line",
+                    heading=None,
+                    text=f"text for {source_id}",
+                    span_start=0,
+                    span_end=10,
+                    line_start=1,
+                    line_end=1,
+                )
+            ],
+        )
+
+    with pipeline.storage.connect() as connection:
+        rows = connection.execute(
+            "select span_id, source_id from source_spans order by source_id",
+        ).fetchall()
+
+    assert [row["source_id"] for row in rows] == ["src_one", "src_two"]
+    assert rows[0]["span_id"] == "span_collision"
+    assert rows[1]["span_id"].startswith("span_collision::src_two:")

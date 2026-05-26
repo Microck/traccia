@@ -12,8 +12,9 @@ from html import unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
+from traccia.google_takeout import is_google_takeout_photo_image
 from traccia.models import SourceFamily, SourceType
 
 _META_FAMILY_NAMES = {
@@ -50,6 +51,8 @@ _SCALAR_FIELD_PRIORITY = (
     "selftext",
     "description",
     "url",
+    "titleUrl",
+    "linkUrl",
     "expanded_url",
     "email",
     "accountId",
@@ -173,6 +176,13 @@ def normalize_family_content(
 
     if source_family == SourceFamily.GOOGLE_TAKEOUT and source_type == SourceType.CALENDAR:
         return _normalize_google_calendar(
+            path=path,
+            project_relative_path=project_relative_path,
+            source_family_subproduct=source_family_subproduct,
+        )
+
+    if source_family == SourceFamily.GOOGLE_TAKEOUT and source_type == SourceType.IMAGE:
+        return _normalize_google_photo_image(
             path=path,
             project_relative_path=project_relative_path,
             source_family_subproduct=source_family_subproduct,
@@ -525,6 +535,83 @@ def _normalize_google_text(
     )
 
 
+def _normalize_google_photo_image(
+    *,
+    path: Path,
+    project_relative_path: Path,
+    source_family_subproduct: str | None,
+) -> FamilyNormalizedContent | None:
+    if not is_google_takeout_photo_image(project_relative_path):
+        return None
+
+    sidecar = _find_google_photo_sidecar(path)
+    sidecar_payload = _read_json_object(sidecar) if sidecar else None
+    metadata_lines = _collect_scalar_lines(sidecar_payload) if sidecar_payload else []
+    title = _clean_scalar(sidecar_payload.get("title")) if isinstance(sidecar_payload, dict) else None
+    created_at = (
+        _parse_datetime_candidate(sidecar_payload.get("photoTakenTime", {}).get("timestamp"))
+        if isinstance(sidecar_payload, dict) and isinstance(sidecar_payload.get("photoTakenTime"), dict)
+        else None
+    )
+
+    header_lines = [
+        "# Google Takeout photo sample",
+        f"relative path: {project_relative_path.as_posix()}",
+    ]
+    if source_family_subproduct:
+        header_lines.append(f"subproduct: {source_family_subproduct}")
+    if sidecar:
+        header_lines.append(f"sidecar: {sidecar.name}")
+
+    body_lines = [
+        f"image_filename: {path.name}",
+        "This image was selected by the Google Photos fast-vision sampler.",
+    ]
+    body_lines.extend(metadata_lines[:24])
+    return FamilyNormalizedContent(
+        text="\n".join(header_lines + [""] + body_lines).strip(),
+        parser="google-takeout-photo-image",
+        metadata={
+            "family_normalizer": "google-takeout-photo-image",
+            "family_normalizer_record_count": 1,
+            "google_photos_sidecar": sidecar.name if sidecar else None,
+            "attachment_references": [
+                {
+                    "reference": path.as_uri(),
+                    "kind": "image",
+                    "label": title or path.name,
+                    "contextual_hint": "google_photos_fast_vision_sample",
+                }
+            ],
+        },
+        title=title or path.stem,
+        created_at=created_at,
+    )
+
+
+def _find_google_photo_sidecar(path: Path) -> Path | None:
+    candidates = [
+        path.with_name(f"{path.name}.json"),
+        path.with_name(f"{path.name}.supplemental-metadata.json"),
+    ]
+    candidates.extend(sorted(path.parent.glob(f"{path.name}.supp*.json")))
+    candidates.extend(sorted(path.parent.glob(f"{path.stem}.supp*.json")))
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _read_json_object(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 class _StructuredHtmlTextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -652,8 +739,17 @@ def _format_google_youtube_csv_row(*, row: dict[str, str | None], index: int) ->
     channel_title = _row_value_by_aliases(row, "titulo del canal", "channel title")
     channel_url = _row_value_by_aliases(row, "url del canal", "channel url")
     video_title = _row_value_by_aliases(row, "titulo del video original", "video title original")
-    video_id = _row_value_by_aliases(row, "id de video", "video id")
-    comment_text = _row_value_by_aliases(row, "texto del comentario", "comment text")
+    video_id = _row_value_by_aliases(row, "id de video", "video id", "videoid")
+    video_url = _row_value_by_aliases(row, "url del video", "video url", "video_url")
+    comment_text = _row_value_by_aliases(
+        row,
+        "texto del comentario",
+        "comment text",
+        "contenido del comentario",
+        "content",
+        "content json",
+        "contentjson",
+    )
 
     if channel_title:
         parts.append(f"channel: {channel_title}")
@@ -663,6 +759,10 @@ def _format_google_youtube_csv_row(*, row: dict[str, str | None], index: int) ->
         parts.append(f"video_title: {video_title}")
     if video_id:
         parts.append(f"video_id: {video_id}")
+    if not video_url and video_id:
+        video_url = f"https://www.youtube.com/watch?v={video_id}"
+    if video_url:
+        parts.append(f"video_url: {video_url}")
 
     for alias, label in (
         ("marca de tiempo de creacion del comentario", "created_at"),
@@ -678,7 +778,7 @@ def _format_google_youtube_csv_row(*, row: dict[str, str | None], index: int) ->
             parts.append(f"{label}: {value}")
 
     if comment_text:
-        parts.append(comment_text)
+        parts.append(_reconstruct_youtube_comment_text(comment_text) or comment_text)
 
     if len(parts) == 1:
         for key, value in row.items():
@@ -695,6 +795,29 @@ def _google_csv_row_label(row: dict[str, str | None]) -> str | None:
         or _row_value_by_aliases(row, "id de video", "video id")
         or _row_value_by_aliases(row, "id de comentario", "comment id")
     )
+
+
+def _reconstruct_youtube_comment_text(value: str) -> str | None:
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    segments = payload.get("takeoutSegments") if isinstance(payload, dict) else None
+    if not isinstance(segments, list):
+        return None
+    pieces: list[str] = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        text = _clean_scalar(segment.get("text"))
+        link = segment.get("link")
+        link_url = _clean_scalar(link.get("linkUrl")) if isinstance(link, dict) else None
+        if text:
+            pieces.append(text)
+        elif link_url:
+            pieces.append(link_url)
+    reconstructed = " ".join(pieces).strip()
+    return reconstructed or None
 
 
 def _row_value_by_aliases(row: dict[str, str | None], *aliases: str) -> str | None:
@@ -820,15 +943,21 @@ def _format_google_mbox_message(*, message: mailbox.mboxMessage, index: int) -> 
         ("from", "from"),
         ("to", "to"),
         ("subject", "subject"),
+        ("x-gmail-labels", "gmail_labels"),
     ):
         value = _clean_scalar(message.get(header))
         if value:
             parts.append(f"{label}: {value}")
 
-    snippet = _mbox_body_snippet(message)
+    snippet = _mbox_body_snippet(message) if _is_sent_gmail_message(message) else None
     if snippet:
         parts.append(snippet)
     return "\n".join(parts) if len(parts) > 1 else ""
+
+
+def _is_sent_gmail_message(message: mailbox.mboxMessage) -> bool:
+    labels = _normalize_key(message.get("x-gmail-labels"))
+    return any(label in labels.split() for label in {"sent", "enviado"})
 
 
 def _mbox_body_snippet(message: mailbox.mboxMessage) -> str | None:
@@ -1017,8 +1146,8 @@ def _attachment_reference_from_value(
     if not cleaned:
         return None
 
-    parsed = urlparse(cleaned)
-    candidate_path = parsed.path or cleaned
+    parsed = _safe_urlparse(cleaned)
+    candidate_path = (parsed.path if parsed else None) or cleaned
     suffix = Path(candidate_path).suffix.lower()
     kind = _MEDIA_SUFFIX_TO_KIND.get(suffix)
     if not kind:
@@ -1033,6 +1162,13 @@ def _attachment_reference_from_value(
     if contextual_hint:
         payload["contextual_hint"] = contextual_hint
     return payload
+
+
+def _safe_urlparse(value: str) -> ParseResult | None:
+    try:
+        return urlparse(value)
+    except ValueError:
+        return None
 
 
 def _dedupe_attachment_references(references: list[dict[str, Any]]) -> list[dict[str, Any]]:

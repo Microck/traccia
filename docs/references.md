@@ -90,7 +90,7 @@ These repos are relevant mostly because they show the wrong default framing for 
 - Karpathy gist plus llm-wiki-compiler are the closest match for the raw -> compiled knowledge pattern.
 - swarmvault is the richest donor for provenance, reviewability, and graph/report ideas.
 - llm-wiki-agent and nashsu/llm_wiki are the best references for repo ergonomics and user-facing browsing.
-- graphify and Understand-Anything are the strongest references for graph outputs and graph viewer interaction.
+- graphify and Understand-Anything are useful references for graph outputs and interaction patterns.
 - resume-driven skill-graph repos are mostly anti-references because they bias the product toward hiring and gap analysis instead of reflective archival.
 
 ## Current conclusion
@@ -101,5 +101,5 @@ Recommended stance:
 - borrow architecture heavily from `atomicmemory/llm-wiki-compiler`
 - borrow provenance and review patterns selectively from `swarmvault`
 - borrow repo and export conventions from `llm-wiki-agent`
-- borrow viewer ideas from `nashsu/llm_wiki`, `graphify`, and `Understand-Anything`
+- borrow browsing and graph-output ideas from `nashsu/llm_wiki`, `graphify`, and `Understand-Anything`
 - do not build directly on the job-search-oriented skill-graph repos

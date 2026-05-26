@@ -25,6 +25,8 @@ GOOGLE_TAKEOUT_MARKERS = (
     "mi actividad/",
     "my activity/",
     "google chat/",
+    "google fotos/",
+    "google photos/",
     "notebooklm/",
 )
 
@@ -87,6 +89,8 @@ GOOGLE_SUBPRODUCT_MARKERS = (
     ("profile/", "profile"),
     ("gemini/", "gemini"),
     ("google chat/", "google-chat"),
+    ("google fotos/", "google-photos"),
+    ("google photos/", "google-photos"),
     ("notebooklm/", "notebooklm"),
     ("maps/", "maps"),
     ("grupos/", "groups"),

@@ -303,6 +303,25 @@ CREATE TABLE IF NOT EXISTS extraction_checkpoints (
     UNIQUE(source_id, chunk_index)
 );
 
+CREATE TABLE IF NOT EXISTS graph_candidate_cache (
+    candidate_name TEXT NOT NULL,
+    support_fingerprint TEXT NOT NULL,
+    canonical_decision_json TEXT NOT NULL,
+    score_payload_json TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(candidate_name, support_fingerprint)
+);
+
+CREATE TABLE IF NOT EXISTS graph_skill_score_cache (
+    skill_id TEXT NOT NULL,
+    evidence_fingerprint TEXT NOT NULL,
+    score_payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(skill_id, evidence_fingerprint)
+);
+
 CREATE TABLE IF NOT EXISTS manual_overrides (
     override_id TEXT PRIMARY KEY,
     target_type TEXT NOT NULL,
@@ -321,7 +340,6 @@ DIRECTORIES = (
     "parsed",
     "evidence",
     "graph",
-    "viewer",
     "tree",
     "tree/nodes",
     "profile",

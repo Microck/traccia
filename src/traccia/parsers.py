@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
 from traccia.config import TracciaConfig
 from traccia.document_normalizer import DOCUMENT_SOURCE_TYPES, normalize_document
@@ -83,6 +83,18 @@ COMPRESSED_TEXT_INNER_EXTENSIONS = {
     ".markdown",
 }
 
+IMAGE_SOURCE_EXTENSIONS = {
+    ".avif",
+    ".bmp",
+    ".gif",
+    ".heic",
+    ".heif",
+    ".jpeg",
+    ".jpg",
+    ".png",
+    ".webp",
+}
+
 KNOWN_BINARY_EXTENSIONS = {
     ".7z",
     ".aac",
@@ -136,6 +148,20 @@ TEXT_READ_ENCODINGS = (
 
 MAX_UNKNOWN_EXTENSION_TEXT_SNIFF_BYTES = 768 * 1024
 
+USER_AGENT_LOG_ROLES = {"user", "human", "developer"}
+NON_USER_AGENT_LOG_ROLES = {
+    "assistant",
+    "ai",
+    "agent",
+    "model",
+    "system",
+    "tool",
+    "function",
+    "thinking",
+    "reasoning",
+    "analysis",
+}
+
 
 
 @dataclass(slots=True)
@@ -167,6 +193,8 @@ def detect_source_type(path: Path) -> SourceType:
     source_type = SUPPORTED_EXTENSIONS.get(_compressed_text_inner_suffix(path) or path.suffix.lower())
     if source_type:
         return source_type
+    if path.suffix.lower() in IMAGE_SOURCE_EXTENSIONS:
+        return SourceType.IMAGE
     if _looks_like_extensionless_text_export(path):
         return SourceType.TEXT
     if sniff_text_file(path):
@@ -359,7 +387,19 @@ def _parse_source_content(
         source_type=source_type,
         text=text,
     )
+    agent_log = _parse_agent_log_text(
+        text=text,
+        source_id=source_id,
+        project_relative_path=project_relative_path,
+        source_category=source_category,
+    )
     metadata = dict(metadata)
+    if agent_log:
+        text, agent_log_spans, agent_log_metadata = agent_log
+        metadata.update(agent_log_metadata)
+        parser = agent_log_metadata["structured_export_kind"]
+        source_type = SourceType.CHAT
+        source_category = SourceCategory.AI_DIALOGUE
     remote_media_references = _collect_remote_media_url_references_from_text(text)
     combined_attachment_references = attachment_references + remote_media_references
     attachments = _build_linked_attachments(
@@ -375,7 +415,7 @@ def _parse_source_content(
         metadata["attachment_count"] = len(attachments)
     return ParsedSourceContent(
         text=text,
-        spans=_segment_text(text=text, source_id=source_id),
+        spans=agent_log_spans if agent_log else _segment_text(text=text, source_id=source_id),
         source_type=source_type,
         source_category=source_category,
         parser=parser,
@@ -387,6 +427,8 @@ def _parse_source_content(
 
 
 def _read_text(path: Path, source_type: SourceType) -> str:
+    if source_type == SourceType.IMAGE:
+        return f"Image file: {path.name}"
     if source_type in {SourceType.MARKDOWN, SourceType.TEXT, SourceType.CODE, SourceType.CALENDAR}:
         return _read_text_with_fallback(path)
     if source_type == SourceType.JSON:
@@ -647,6 +689,132 @@ def _parse_ai_conversation_export(*, payload: object, source_id: str) -> ParsedS
     )
 
 
+def _parse_agent_log_text(
+    *,
+    text: str,
+    source_id: str,
+    project_relative_path: Path,
+    source_category: SourceCategory,
+) -> tuple[str, list[ParsedSpan], dict[str, Any]] | None:
+    lowered_path = project_relative_path.as_posix().lower()
+    if "agent-logs" not in lowered_path and source_category != SourceCategory.AI_DIALOGUE:
+        return None
+
+    entries = _parse_jsonl_agent_log_entries(text)
+    parser_kind = "agent-log-jsonl"
+    if not entries:
+        entries = _parse_markdown_agent_log_entries(text)
+        parser_kind = "agent-log-markdown"
+    if not entries:
+        return None
+
+    normalized_entries = [
+        {"heading": entry["role"], "text": f"{entry['role'].title()}: {entry['content']}"}
+        for entry in entries
+        if entry["content"].strip()
+    ]
+    if not normalized_entries:
+        return None
+    parsed_text, spans = _build_structured_spans(entries=normalized_entries, source_id=source_id)
+    role_counts: dict[str, int] = {}
+    for entry in normalized_entries:
+        role = entry["heading"]
+        role_counts[role] = role_counts.get(role, 0) + 1
+    return (
+        parsed_text,
+        spans,
+        {
+            "structured_export_kind": parser_kind,
+            "message_count": len(normalized_entries),
+            "role_counts": role_counts,
+            "attribution_policy": "only user/human/developer spans may produce person-skill evidence",
+        },
+    )
+
+
+def _parse_jsonl_agent_log_entries(text: str) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    parsed_lines = 0
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        role = _normalize_agent_log_role(payload.get("role") or payload.get("type") or payload.get("speaker"))
+        content = _coerce_message_text(
+            payload.get("content")
+            or payload.get("message")
+            or payload.get("text")
+            or payload.get("markdown")
+            or payload.get("output")
+        )
+        if role and content:
+            entries.append({"role": role, "content": content})
+            parsed_lines += 1
+    # Avoid treating arbitrary JSONL data as chat unless it has multiple role-tagged records.
+    return entries if parsed_lines >= 2 else []
+
+
+def _parse_markdown_agent_log_entries(text: str) -> list[dict[str, str]]:
+    marker = re.compile(
+        r"^\s{0,3}(?:#{1,6}\s*)?"
+        r"(?:\*\*)?"
+        r"(user|human|developer|assistant|ai|agent|model|system|tool|function|thinking|reasoning|analysis)"
+        r"(?:\*\*)?"
+        r"\s*(?::|-|$)",
+        re.IGNORECASE,
+    )
+    entries: list[dict[str, str]] = []
+    current_role: str | None = None
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_role, current_lines
+        if current_role and any(line.strip() for line in current_lines):
+            entries.append({"role": current_role, "content": "\n".join(current_lines).strip()})
+        current_role = None
+        current_lines = []
+
+    for line in text.splitlines():
+        match = marker.match(line)
+        if match:
+            flush()
+            current_role = _normalize_agent_log_role(match.group(1))
+            remainder = line[match.end() :].strip()
+            if remainder:
+                current_lines.append(remainder)
+            continue
+        if current_role:
+            current_lines.append(line)
+    flush()
+    role_set = {entry["role"] for entry in entries}
+    if role_set & USER_AGENT_LOG_ROLES and role_set & NON_USER_AGENT_LOG_ROLES:
+        return entries
+    return []
+
+
+def _normalize_agent_log_role(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower().replace("_", "-")
+    if normalized in USER_AGENT_LOG_ROLES:
+        return "user"
+    if normalized in NON_USER_AGENT_LOG_ROLES:
+        if normalized in {"thinking", "reasoning", "analysis"}:
+            return "thinking"
+        if normalized in {"tool", "function"}:
+            return "tool"
+        if normalized == "system":
+            return "system"
+        return "assistant"
+    return None
+
+
 def _parse_reddit_export(*, payload: object, source_id: str) -> ParsedSourceContent:
     if not isinstance(payload, dict):
         raise ValueError("Reddit export payload must be an object")
@@ -858,6 +1026,8 @@ def _classify_source_category(
     lowered_path = project_relative_path.as_posix().lower()
     filename = path.name.lower()
 
+    if "agent-logs" in lowered_path:
+        return SourceCategory.AI_DIALOGUE
     if any(token in lowered_path or token in filename for token in ("chatgpt", "claude", "gemini", "assistant", "ai-chat", "conversation")):
         return SourceCategory.AI_DIALOGUE
     if any(token in lowered_path or token in filename for token in ("reddit", "twitter", "tweet", "x-", "mastodon", "forum", "discord", "slack", "social", "profile", "linkedin")):
@@ -991,7 +1161,9 @@ def _attachment_reference_from_value(
     cleaned = value.strip()
     if not cleaned:
         return None
-    parsed = urlparse(cleaned)
+    parsed = _safe_urlparse(cleaned)
+    if parsed is None:
+        return None
     suffix = Path(parsed.path or cleaned).suffix.lower()
     kind = _ATTACHMENT_SUFFIX_TO_KIND.get(suffix)
     if kind is None:
@@ -1025,7 +1197,9 @@ def _remote_media_reference_from_url(
     contextual_hint: str | None = None,
 ) -> dict[str, Any] | None:
     cleaned = value.rstrip(".,;:!?)]}\"'")
-    parsed = urlparse(cleaned)
+    parsed = _safe_urlparse(cleaned)
+    if parsed is None:
+        return None
     if parsed.scheme not in {"http", "https"}:
         return None
 
@@ -1086,6 +1260,15 @@ def _build_linked_attachments(
     remote_media_enrichment_command = (
         config.multimodal.remote_media_enrichment_command if config else "summarize"
     )
+    remote_media_enrichment_video_mode = (
+        config.multimodal.remote_media_enrichment_video_mode if config else "understand"
+    )
+    enable_remote_media_slides = (
+        config.multimodal.enable_remote_media_slides if config else True
+    )
+    enable_remote_media_slides_ocr = (
+        config.multimodal.enable_remote_media_slides_ocr if config else True
+    )
     remote_media_enrichment_timeout_seconds = (
         config.multimodal.remote_media_enrichment_timeout_seconds if config else 180
     )
@@ -1137,6 +1320,9 @@ def _build_linked_attachments(
                 extracted_text, attachment_metadata = _extract_remote_media_text(
                     reference,
                     command=remote_media_enrichment_command,
+                    video_mode=remote_media_enrichment_video_mode,
+                    enable_slides=enable_remote_media_slides,
+                    enable_slides_ocr=enable_remote_media_slides_ocr,
                     max_characters=max_attachment_transcript_characters,
                     timeout_seconds=remote_media_enrichment_timeout_seconds,
                 )
@@ -1164,19 +1350,38 @@ def _resolve_attachment_path(*, source_path: Path, reference: str) -> Path | Non
         return None
     if reference.startswith("file://"):
         candidate = Path(reference.removeprefix("file://"))
-        return candidate.resolve() if candidate.exists() else None
+        try:
+            return candidate.resolve() if candidate.exists() else None
+        except OSError:
+            return None
 
-    parsed = urlparse(reference)
-    raw_path = parsed.path or reference
+    parsed = _safe_urlparse(reference)
+    raw_path = (parsed.path if parsed else None) or reference
     if not raw_path:
         return None
 
     candidate = Path(raw_path)
-    if not candidate.is_absolute():
-        candidate = (source_path.parent / candidate).resolve()
-    else:
-        candidate = candidate.resolve()
-    return candidate if candidate.exists() else None
+    try:
+        if not candidate.is_absolute():
+            relative_candidate = candidate
+            candidate = (source_path.parent / relative_candidate).resolve()
+            if not candidate.exists() and source_path.is_symlink():
+                candidate = (source_path.resolve().parent / relative_candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+        return candidate if candidate.exists() else None
+    except OSError:
+        # Export rows can contain arbitrary user/message text in fields that look
+        # attachment-like. Some of that text is longer than filesystem component
+        # limits; it is not a local attachment and must not fail ingestion.
+        return None
+
+
+def _safe_urlparse(value: str) -> ParseResult | None:
+    try:
+        return urlparse(value)
+    except ValueError:
+        return None
 
 
 def _extract_image_text(path: Path, *, max_characters: int, timeout_seconds: int) -> str | None:
@@ -1252,6 +1457,9 @@ def _extract_remote_media_text(
     reference: str,
     *,
     command: str,
+    video_mode: str,
+    enable_slides: bool,
+    enable_slides_ocr: bool,
     max_characters: int,
     timeout_seconds: int,
 ) -> tuple[str | None, dict[str, Any]]:
@@ -1268,6 +1476,13 @@ def _extract_remote_media_text(
             return None, {}
         executable_label = executable
 
+    normalized_video_mode = video_mode.strip().lower()
+    if normalized_video_mode not in {"auto", "transcript", "understand"}:
+        raise ValueError(
+            "Unsupported multimodal.remote_media_enrichment_video_mode: "
+            f"{video_mode}"
+        )
+
     process_command = [
         executable,
         reference,
@@ -1276,7 +1491,7 @@ def _extract_remote_media_text(
         "--format",
         "text",
         "--video-mode",
-        "transcript",
+        normalized_video_mode,
         "--youtube",
         "auto",
         "--timeout",
@@ -1284,6 +1499,10 @@ def _extract_remote_media_text(
         "--max-extract-characters",
         str(max_characters),
     ]
+    if enable_slides:
+        process_command.append("--slides")
+    if enable_slides_ocr:
+        process_command.append("--slides-ocr")
     try:
         completed = subprocess.run(
             process_command,
@@ -1306,6 +1525,9 @@ def _extract_remote_media_text(
             "url_enrichment_provider": "summarize_cli",
             "url_enrichment_command": executable_label,
             "url_enrichment_mode": "extract",
+            "url_enrichment_video_mode": normalized_video_mode,
+            "url_enrichment_slides": enable_slides,
+            "url_enrichment_slides_ocr": enable_slides_ocr,
         },
     )
 

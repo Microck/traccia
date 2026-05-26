@@ -3,12 +3,14 @@ import os
 import stat
 import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+import traccia.cli as cli_module
 import traccia.llm as llm_module
 from traccia.cli import app
 from traccia.config import TracciaConfig, load_config
@@ -22,6 +24,12 @@ def _local_ingest_loop_script() -> Path:
     if not runner_script.exists():
         pytest.skip("local-only ingest loop runner script is not tracked in the public repo")
     return runner_script
+
+
+@pytest.fixture(autouse=True)
+def isolate_backend_test_environment(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("TRACCIA_LLM_LEASE_PATH", str(tmp_path / "llm-request.lock"))
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
 
 def test_init_creates_phase_zero_layout(tmp_path: Path) -> None:
@@ -84,8 +92,112 @@ def test_doctor_reports_backend_state_without_failing_for_missing_auth(tmp_path:
     assert "image OCR" in result.stdout
     assert "media transcription" in result.stdout
     assert "remote media enrichment" in result.stdout
+    assert "status=" in result.stdout
+    assert "yt-dlp=" in result.stdout
+    assert "transcription_fallback=" in result.stdout
     assert "backend auth: missing env var OPENAI_API_KEY" in result.stdout
     assert "Phase 0 scaffold looks healthy." in result.stdout
+
+
+def test_remote_media_doctor_reports_degraded_when_transcription_fallback_is_missing(
+    monkeypatch,
+) -> None:
+    config = TracciaConfig()
+
+    monkeypatch.setattr(
+        cli_module,
+        "_command_available",
+        lambda command: command in {"summarize", "ffmpeg", "yt-dlp", "tesseract"},
+    )
+    monkeypatch.setattr(cli_module, "_path_env_available", lambda name: False)
+    monkeypatch.setattr(cli_module, "_env_available", lambda name: False)
+    monkeypatch.setattr(cli_module, "_summarize_whisper_cpp_model_path", lambda: Path("/models/missing.bin"))
+    monkeypatch.setattr(cli_module, "_summarize_whisper_cpp_model_available", lambda: False)
+
+    line = cli_module._remote_media_capability_line(config)
+
+    assert "status=degraded" in line
+    assert "summarize=yes" in line
+    assert "ffmpeg=yes" in line
+    assert "yt-dlp=yes" in line
+    assert "tesseract=yes" in line
+    assert "transcription_fallback=api_key:no local_whisper_cpp:no" in line
+    assert "whisper_cpp_binary:no" in line
+    assert "whisper_cpp_model:no" in line
+    assert "whisper_cpp_model_path=/models/missing.bin" in line
+
+
+def test_remote_media_doctor_reports_ready_when_default_toolchain_is_available(
+    monkeypatch,
+) -> None:
+    config = TracciaConfig()
+
+    monkeypatch.setattr(
+        cli_module,
+        "_command_available",
+        lambda command: command in {"summarize", "ffmpeg", "yt-dlp", "tesseract"},
+    )
+    monkeypatch.setattr(cli_module, "_path_env_available", lambda name: False)
+    monkeypatch.setattr(cli_module, "_env_available", lambda name: name == "OPENAI_API_KEY")
+    monkeypatch.setattr(cli_module, "_summarize_whisper_cpp_model_path", lambda: Path("/models/missing.bin"))
+    monkeypatch.setattr(cli_module, "_summarize_whisper_cpp_model_available", lambda: False)
+
+    line = cli_module._remote_media_capability_line(config)
+
+    assert "status=ready" in line
+    assert "video_mode=understand" in line
+    assert "slides=true" in line
+    assert "slides_ocr=true" in line
+    assert "transcription_fallback=api_key:yes local_whisper_cpp:no" in line
+    assert "whisper_cpp_binary:no" in line
+    assert "whisper_cpp_model:no" in line
+
+
+def test_remote_media_doctor_requires_whisper_cpp_model_for_local_fallback(
+    monkeypatch,
+) -> None:
+    config = TracciaConfig()
+
+    monkeypatch.setattr(
+        cli_module,
+        "_command_available",
+        lambda command: command in {"summarize", "ffmpeg", "yt-dlp", "tesseract", "whisper-cli"},
+    )
+    monkeypatch.setattr(cli_module, "_path_env_available", lambda name: False)
+    monkeypatch.setattr(cli_module, "_env_available", lambda name: False)
+    monkeypatch.setattr(cli_module, "_summarize_whisper_cpp_model_path", lambda: Path("/models/missing.bin"))
+    monkeypatch.setattr(cli_module, "_summarize_whisper_cpp_model_available", lambda: False)
+
+    line = cli_module._remote_media_capability_line(config)
+
+    assert "status=degraded" in line
+    assert "local_whisper_cpp:no" in line
+    assert "whisper_cpp_binary:yes" in line
+    assert "whisper_cpp_model:no" in line
+
+
+def test_remote_media_doctor_accepts_whisper_cpp_binary_and_model_for_local_fallback(
+    monkeypatch,
+) -> None:
+    config = TracciaConfig()
+
+    monkeypatch.setattr(
+        cli_module,
+        "_command_available",
+        lambda command: command in {"summarize", "ffmpeg", "yt-dlp", "tesseract", "whisper-cli"},
+    )
+    monkeypatch.setattr(cli_module, "_path_env_available", lambda name: False)
+    monkeypatch.setattr(cli_module, "_env_available", lambda name: False)
+    monkeypatch.setattr(cli_module, "_summarize_whisper_cpp_model_path", lambda: Path("/models/ggml-base.bin"))
+    monkeypatch.setattr(cli_module, "_summarize_whisper_cpp_model_available", lambda: True)
+
+    line = cli_module._remote_media_capability_line(config)
+
+    assert "status=ready" in line
+    assert "transcription_fallback=api_key:no local_whisper_cpp:yes" in line
+    assert "whisper_cpp_binary:yes" in line
+    assert "whisper_cpp_model:yes" in line
+    assert "whisper_cpp_model_path=/models/ggml-base.bin" in line
 
 
 def test_doctor_check_backend_requires_auth_for_live_provider(tmp_path: Path) -> None:
@@ -205,6 +317,112 @@ def test_openai_compatible_backend_uses_openai_style_http_contract(monkeypatch) 
         assert backend.healthcheck() == "backend reachable, models=1"
         assert requests[0]["response_format"]["type"] == "json_schema"
         assert requests[0]["messages"][0]["role"] == "system"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_scoring_payload_bounds_large_evidence_sets() -> None:
+    evidence_items = [
+        EvidenceItem.model_validate(
+            {
+                "evidence_id": f"ev_python_{index:03d}",
+                "source_id": f"src_python_{index:03d}",
+                "span_start": 0,
+                "span_end": 10,
+                "quote": "Built a Python CLI. " * 180,
+                "evidence_type": "implemented",
+                "signal_class": "artifact_backed_work",
+                "skill_candidates": ["Python"],
+                "artifact_candidates": [],
+                "time_reference": "2026-04-01",
+                "reliability": "tier_a",
+                "extractor_version": "phase-0",
+                "confidence": 0.9,
+            }
+        )
+        for index in range(60)
+    ]
+
+    payload = llm_module._scoring_payload(
+        ScoringRequest(
+            skill=build_skill_node("Python"),
+            evidence_items=evidence_items,
+            thresholds={"consumption_max_level": 2},
+            locked=False,
+            hidden=False,
+        )
+    )
+
+    prompt_quote_count = payload.count("quote_json=")
+
+    assert "evidence_total: 60" in payload
+    assert f"evidence_omitted_from_prompt: {60 - prompt_quote_count}" in payload
+    assert f"ev_python_{prompt_quote_count - 1:03d}" in payload
+    assert f"ev_python_{prompt_quote_count:03d}" not in payload
+    assert prompt_quote_count < len(evidence_items)
+    assert len(payload) < 35_000
+
+
+def test_openai_compatible_backend_enforces_wall_clock_timeout(monkeypatch) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path != "/chat/completions":
+                self.send_error(404)
+                return
+            content_length = int(self.headers["Content-Length"])
+            self.rfile.read(content_length)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            for chunk in ['{"choices":[{"message":{"content":"', "{"]:
+                self.wfile.write(chunk.encode("utf-8"))
+                self.wfile.flush()
+                time.sleep(0.7)
+            self.wfile.write(b'}}"}]}')
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A003
+            del format, args
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    try:
+        monkeypatch.setattr(
+            llm_module,
+            "_should_wait_for_local_backend_transport_error",
+            lambda *, base_url, exc: False,
+        )
+        monkeypatch.setenv("TEST_OPENAI_COMPATIBLE_KEY", "test-key")
+        config = TracciaConfig.model_validate(
+            {
+                "project_name": "fixture-traccia",
+                "backend": {
+                    "provider": "openai_compatible",
+                    "model": "stub-model",
+                    "api_key_env": "TEST_OPENAI_COMPATIBLE_KEY",
+                    "base_url": f"http://127.0.0.1:{server.server_port}",
+                    "api_style": "chat_completions",
+                    "structured_output_mode": "json_schema",
+                    "timeout_seconds": 1,
+                    "max_retries": 1,
+                },
+            }
+        )
+        backend = OpenAICompatibleBackend(config)
+
+        with pytest.raises(llm_module.BackendError, match="wall-clock timeout"):
+            backend.score_skill(
+                prompt="Return a score payload.",
+                request=ScoringRequest(
+                    skill=build_skill_node("Python"),
+                    evidence_items=[],
+                    thresholds={"consumption_max_level": 2},
+                    locked=False,
+                    hidden=False,
+                ),
+            )
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -487,6 +705,7 @@ def test_traccia_ingest_loop_honors_gemini_human_quota_reset_duration(tmp_path: 
 
 def test_openai_compatible_backend_uses_full_validation_retry_budget(monkeypatch) -> None:
     attempts = {"count": 0}
+    sleep_calls: list[float] = []
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
@@ -526,6 +745,7 @@ def test_openai_compatible_backend_uses_full_validation_retry_budget(monkeypatch
     thread.start()
 
     try:
+        monkeypatch.setattr(llm_module.time, "sleep", sleep_calls.append)
         monkeypatch.setenv("TEST_OPENAI_COMPATIBLE_KEY", "test-key")
         config = TracciaConfig.model_validate(
             {
@@ -575,6 +795,7 @@ def test_openai_compatible_backend_uses_full_validation_retry_budget(monkeypatch
 
         assert payload.rationale == "recovered on retry"
         assert attempts["count"] == 3
+        assert sleep_calls == [0.2, 0.4]
     finally:
         server.shutdown()
         thread.join(timeout=5)

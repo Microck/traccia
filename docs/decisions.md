@@ -121,7 +121,7 @@ The current intended flow is:
 5. canonicalize against existing node catalog
 6. update person-state scoring
 7. update graph projections
-8. update markdown, JSON, viewer, and append-only log
+8. update markdown, JSON, profile exports, and append-only log
 
 Important implication:
 - no cross-file context at extraction time
@@ -151,7 +151,7 @@ The GitHub research confirmed that there is no strong open-source exact match fo
 
 What exists today is stronger in two adjacent categories:
 - LLM wiki / knowledge-compilation systems
-- graph viewers and graph-report tools
+- graph-report tools
 
 The obvious "skill graph" repos are mostly the wrong domain because they are:
 - resume-driven
@@ -167,7 +167,7 @@ The obvious "skill graph" repos are mostly the wrong domain because they are:
 | `SamurAIGPT/llm-wiki-agent` | repo and export convention donor | borrow conventions, not engine |
 | `nashsu/llm_wiki` | polished product and queue UX donor | borrow UI ideas only |
 | `safishamsi/graphify` | graph packaging and certainty-label donor | borrow graph semantics and reporting |
-| `Lum1104/Understand-Anything` | graph viewer donor | borrow viewer patterns only |
+| `Lum1104/Understand-Anything` | graph reporting donor | borrow graph patterns only |
 | `RoninATX/Human-Skill-Tree` | visual motif | UI reference only |
 | `nshadov/personal-skill-tree` | visual motif | UI reference only |
 | `NickSaulnier/SkillGraph` and similar repos | hiring / job-fit anti-reference | do not build from |
@@ -181,7 +181,7 @@ The strongest current recommendation is:
 - borrow patterns rather than forking a repo
 - treat `atomicmemory/llm-wiki-compiler` as the closest conceptual parent
 - treat `swarmvault` as the richest donor for provenance, approvals, and graph/report patterns
-- treat graph viewers as separate reference material, not as a product foundation
+- treat graph UI examples as separate reference material, not as a product foundation
 
 ## 8. Calibration defaults
 
