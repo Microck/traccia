@@ -625,6 +625,7 @@ def test_export_viewer_installs_motion_transition_hooks(tmp_path: Path) -> None:
     html = (export_root / "index.html").read_text()
     css = (export_root / "assets" / "viewer.css").read_text()
     js = (export_root / "assets" / "viewer.js").read_text()
+    sfx_js = (export_root / "assets" / "sfx.js").read_text()
 
     assert 'aria-label="Toggle sound" aria-pressed="true"' in html
     assert 'class="t-icon-swap sound-icon-swap" data-state="on"' in html
@@ -632,9 +633,43 @@ def test_export_viewer_installs_motion_transition_hooks(tmp_path: Path) -> None:
     assert 'class="legend t-panel-slide"' in html
     assert 'class="selection-dock t-panel-slide"' in html
     assert 'class="sheet t-panel-slide"' in html
-    assert 'class="t-shimmer" data-text="Loading skill map..."' in html
+    assert 'class="loading-state__loaders" aria-hidden="true"' in html
+    assert 'class="spiral-loader" style="--spiral-size: 24px"' in html
+    assert 'class="spiral-loader__phase spiral-loader__phase--fast"' in html
+    assert 'class="spiral-loader__phase spiral-loader__phase--slow"' in html
+    assert 'class="spiral-loader__path" pathLength="100"' in html
+    assert 'style="--spiral-size: 16px"' not in html
+    assert 'style="--spiral-size: 32px"' not in html
+    assert 'id="filter-confidence-value"' in html
+    assert (
+        'class="t-shimmer loading-state__text" id="loading-message" '
+        'data-text="Loading skill map..."'
+    ) in html
 
     assert ".t-icon-swap" in css
+    assert '.hud-btn:not(.hud-btn--sound)[aria-pressed="true"]' in css
+    assert '.hud-btn--sound[aria-pressed="false"]' in css
+    assert '.hud-btn[aria-pressed="true"] { color: var(--accent-strong)' not in css
+    assert "will-change: opacity, transform" in css
+    assert "--toolbar-indicator-width" not in css
+    assert "toolbar-indicator-width" not in js
+    assert ".spiral-loader__phase--fast" in css
+    assert ".spiral-loader__path" in css
+    assert "@keyframes spiral-loader-fast-phase" in css
+    assert "@keyframes spiral-loader-slow-phase" in css
+    assert "@keyframes spiral-loader-slide" in css
+    assert "@keyframes spiral-loader-trim" in css
+    assert "body.viewer-loading .viewport__canvas" in css
+    assert "body.viewer-loading .hud-actions" in css
+    assert '.loading-state[data-closing="true"]' in css
+    assert ".settings-range::-webkit-slider-runnable-track" in css
+    assert ".settings-range::-webkit-slider-thumb" in css
+    assert ".settings-range::-moz-range-progress" in css
+    assert ".filterbar__range::-webkit-slider-runnable-track" in css
+    assert ".filterbar__range::-webkit-slider-thumb" in css
+    assert "--range-progress" in css
+    assert ".numeric-text-readout" in css
+    assert "text-transform: uppercase" not in css[css.index(".loading-state__text") : css.index(".spiral-loader")]
     assert ".t-shimmer::before" in css
     assert "@keyframes t-shimmer" in css
     assert "@media (hover: hover) and (pointer: fine)" in css
@@ -645,6 +680,29 @@ def test_export_viewer_installs_motion_transition_hooks(tmp_path: Path) -> None:
     assert "function setPanelOpen" in js
     assert "function setDetailSurfaceOpen" in js
     assert 'swap.dataset.state = on ? "on" : "off"' in js
+    assert "function syncRangeProgress" in js
+    assert "function setSettingsOutput" in js
+    assert "function renderNumericText" in js
+    assert "class TracciaNumericText extends HTMLElement" in js
+    assert "customElements.define(\"traccia-numeric-text\"" in js
+    assert "NUMERIC_TEXT_SHADOW_CSS" in js
+    assert "numericTextDiff" in js
+    assert "filter_confidence_value" in js
+    assert "el.value = text;" not in js
+    assert "el.replaceChildren(readout);" in js
+    assert "readout.update(text, shouldAnimate);" in js
+    assert "function playRangeTick" in js
+    assert "sfx.sliderTick();" in js
+    assert "sfx.cancelSliderTicks();" in js
+    assert "sfx.dockButton();" in js
+    assert "if (!nowOn) sfx.dockButton();" in js
+    assert "if (nowOn) sfx.dockButton();" in js
+
+    assert "SLIDER_TICK_FREQ = 5500" in sfx_js
+    assert "SLIDER_NOISE_Q = 18" in sfx_js
+    assert "sliderTick()" in sfx_js
+    assert "cancelSliderTicks()" in sfx_js
+    assert "dockButton()" in sfx_js
 
 
 def test_export_viewer_applies_lightweight_default_filters(tmp_path: Path) -> None:
@@ -2346,8 +2404,18 @@ def test_viewer_js_reports_initialization_failures(tmp_path: Path) -> None:
     assert "graphRes.ok" in init_body
     assert "graph.json returned HTTP" in init_body
     assert 'loadStage = "laying out skill map"' in init_body
+    assert "finishLoading();" in init_body
     assert "Skill map initialization failed during " in init_body
     assert "Failed to initialize skill map" in init_body
+    assert "const LOADING_EXIT_MS = 260" in js
+    assert "function finishLoading" in js
+    assert 'dom.loading_state.dataset.closing = "true"' in js
+    assert "window.setTimeout(function ()" in js
+    assert "function prefersReducedMotion" in js
+    assert '"loading-message"' in js
+    assert "function setLoadingMessage" in js
+    assert "dom.loading_message.dataset.text = msg" in js
+    assert "dom.loading_state.textContent = msg" in js
 
 
 def test_viewer_js_canvas_redraws_in_request_animation_frame(tmp_path: Path) -> None:
@@ -2615,7 +2683,8 @@ def test_viewer_action_dock_has_icon_only_toolbar_hooks(tmp_path: Path) -> None:
 
     assert ".hud-toolbar__indicator {" in css
     assert "--toolbar-indicator-x" in css
-    assert "--toolbar-indicator-width" in css
+    assert "--toolbar-indicator-width" not in css
+    assert "will-change: opacity, transform" in css
     assert "translate3d(var(--toolbar-indicator-x)" in css
     assert ".hud-btn__label" not in css
     assert "max-width: 0" not in css
@@ -2635,6 +2704,8 @@ def test_viewer_js_moves_toolbar_indicator_between_dock_items(tmp_path: Path) ->
     assert 'setProperty("--toolbar-indicator-x"' in js
     assert 'setProperty("--toolbar-indicator-opacity", "1")' in js
     assert 'setProperty("--toolbar-indicator-opacity", "0")' in js
+    assert 'setProperty("--toolbar-indicator-width"' not in js
+    assert 'setProperty("--toolbar-indicator-height"' not in js
     assert 'button.addEventListener("pointerenter"' in js
     assert 'button.addEventListener("focusin"' in js
     assert "syncToolbarIndicator(activeToolbarButton())" in js

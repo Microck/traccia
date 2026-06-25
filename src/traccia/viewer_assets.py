@@ -123,7 +123,10 @@ VIEWER_HTML = """\
       </select>
     </div>
     <div class="filterbar__group">
-      <label class="filterbar__label" for="filter-confidence">Min confidence</label>
+      <label class="filterbar__label filterbar__label--with-value" for="filter-confidence">
+        <span>Min confidence</span>
+        <output id="filter-confidence-value" for="filter-confidence">0%</output>
+      </label>
       <input id="filter-confidence" type="range" min="0" max="1" step="0.05" value="0" class="filterbar__range" aria-label="Minimum confidence filter">
     </div>
     <div class="filterbar__group">
@@ -282,7 +285,21 @@ VIEWER_HTML = """\
 
   <!-- Loading state -->
   <div class="loading-state" id="loading-state">
-    <p class="t-shimmer" data-text="Loading skill map...">Loading skill map...</p>
+    <div class="loading-state__loaders" aria-hidden="true">
+      <span class="spiral-loader" style="--spiral-size: 24px">
+        <svg class="spiral-loader__phase spiral-loader__phase--fast" viewBox="0 0 16 16" focusable="false">
+          <g class="spiral-loader__motion">
+            <path class="spiral-loader__path" pathLength="100" d="M0.500 12.500 C4.952 12.500 7.236 8.784 7.525 5.488 C7.755 2.861 6.718 0.500 4.500 0.500 C2.282 0.500 1.245 2.861 1.475 5.488 C1.764 8.784 4.048 12.500 8.500 12.500 C12.952 12.500 15.236 8.784 15.525 5.488 C15.755 2.861 14.718 0.500 12.500 0.500 C10.282 0.500 9.245 2.861 9.475 5.488 C9.764 8.784 12.048 12.500 16.500 12.500 C20.952 12.500 23.236 8.784 23.525 5.488 C23.755 2.861 22.718 0.500 20.500 0.500 C18.282 0.500 17.248 2.861 17.480 5.488 C17.772 8.784 20.057 12.500 24.500 12.500"></path>
+          </g>
+        </svg>
+        <svg class="spiral-loader__phase spiral-loader__phase--slow" viewBox="0 0 16 16" focusable="false">
+          <g class="spiral-loader__motion">
+            <path class="spiral-loader__path" pathLength="100" d="M0.500 12.500 C4.952 12.500 7.236 8.784 7.525 5.488 C7.755 2.861 6.718 0.500 4.500 0.500 C2.282 0.500 1.245 2.861 1.475 5.488 C1.764 8.784 4.048 12.500 8.500 12.500 C12.952 12.500 15.236 8.784 15.525 5.488 C15.755 2.861 14.718 0.500 12.500 0.500 C10.282 0.500 9.245 2.861 9.475 5.488 C9.764 8.784 12.048 12.500 16.500 12.500 C20.952 12.500 23.236 8.784 23.525 5.488 C23.755 2.861 22.718 0.500 20.500 0.500 C18.282 0.500 17.248 2.861 17.480 5.488 C17.772 8.784 20.057 12.500 24.500 12.500"></path>
+          </g>
+        </svg>
+      </span>
+    </div>
+    <p class="t-shimmer loading-state__text" id="loading-message" data-text="Loading skill map...">Loading skill map...</p>
   </div>
 </main>
 
@@ -535,10 +552,13 @@ body {
   left: 50%;
   right: auto;
   transform: translateX(-50%);
+  transition:
+    opacity 420ms var(--motion-ease-out),
+    transform 420ms var(--motion-ease-out),
+    filter 420ms var(--motion-ease-out);
+  will-change: opacity, transform, filter;
   --toolbar-indicator-x: 4px;
   --toolbar-indicator-y: 4px;
-  --toolbar-indicator-width: 36px;
-  --toolbar-indicator-height: 36px;
   --toolbar-indicator-opacity: 0;
   gap: 2px;
   padding: 4px;
@@ -550,19 +570,17 @@ body {
   top: 0;
   left: 0;
   z-index: 0;
-  width: var(--toolbar-indicator-width);
-  height: var(--toolbar-indicator-height);
+  width: 36px;
+  height: 36px;
   border-radius: var(--radius-sm);
   background: oklch(1 0 0 / 0.045);
   box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.045);
   opacity: var(--toolbar-indicator-opacity);
   transform: translate3d(var(--toolbar-indicator-x), var(--toolbar-indicator-y), 0);
   transition:
-    width 250ms var(--motion-ease-out),
-    height 250ms var(--motion-ease-out),
     opacity 150ms var(--motion-ease-out),
     transform 250ms var(--motion-ease-out);
-  will-change: width, height, opacity, transform;
+  will-change: opacity, transform;
   pointer-events: none;
 }
 .hud-btn {
@@ -580,7 +598,8 @@ body {
     transform var(--motion-press-dur) var(--motion-ease-out);
 }
 .hud-btn:active { transform: scale(0.96); }
-.hud-btn[aria-pressed="true"] { color: var(--accent-strong); background: transparent; }
+.hud-btn:not(.hud-btn--sound)[aria-pressed="true"] { color: var(--accent-strong); background: transparent; }
+.hud-btn--sound[aria-pressed="false"] { color: var(--accent-strong); background: transparent; }
 .hud-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .hud-btn .icon { width: 18px; height: 18px; }
 
@@ -657,8 +676,31 @@ body {
   max-width: 520px;
 }
 .filterbar__group { display: flex; align-items: center; gap: 5px; }
-.filterbar__label { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.4px; }
-.filterbar__select, .filterbar__range {
+.filterbar__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.filterbar__label--with-value {
+  min-width: 104px;
+  justify-content: space-between;
+}
+.filterbar__label output {
+  color: var(--text);
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+  display: inline-flex;
+  justify-content: flex-end;
+  align-items: baseline;
+}
+.filterbar__select {
   height: 30px; font-size: 12px; color: var(--text);
   background: oklch(0.192 0.004 286.018 / 0.9); border: none;
   box-shadow: var(--shadow-border);
@@ -673,7 +715,7 @@ body {
   background: oklch(0.216 0.005 286.06 / 0.95);
   box-shadow: var(--shadow-border-hover);
 }
-.filterbar__range { padding: 0 2px; width: 100px; }
+.filterbar__range { width: 112px; }
 .filterbar__clear {
   height: 30px; padding: 0 12px;
   font-size: 12px; color: var(--text-muted);
@@ -737,11 +779,155 @@ body {
 }
 .settings-label output {
   color: var(--text);
+  min-width: 5ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+  display: inline-flex;
+  justify-content: flex-end;
+  align-items: baseline;
 }
-.settings-range {
+.numeric-text-readout {
+  position: relative;
+  display: inline-flex;
+  white-space: nowrap !important;
+  isolation: isolate;
+}
+.settings-range,
+.filterbar__range {
+  --range-progress: 50%;
+  --range-track: oklch(0.934 0.012 91.522 / 0.105);
+  --range-track-border: oklch(0.934 0.012 91.522 / 0.08);
+  --range-fill: oklch(0.62 0.045 160.104 / 0.82);
+  --range-thumb: oklch(0.934 0.012 91.522 / 0.9);
+  --range-thumb-border: oklch(0.529 0.07 178.573 / 0.42);
+  appearance: none;
+  -webkit-appearance: none;
   width: 100%;
-  height: 28px;
-  accent-color: var(--accent);
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.settings-range::-webkit-slider-runnable-track,
+.filterbar__range::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--range-track-border);
+  background:
+    linear-gradient(
+      90deg,
+      var(--range-fill) 0%,
+      var(--range-fill) var(--range-progress),
+      var(--range-track) var(--range-progress),
+      var(--range-track) 100%
+    );
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.055),
+    inset 0 -1px 0 oklch(0 0 0 / 0.22);
+}
+.settings-range::-webkit-slider-thumb,
+.filterbar__range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -5px;
+  border-radius: 999px;
+  border: 1px solid var(--range-thumb-border);
+  background: var(--range-thumb);
+  box-shadow:
+    0 4px 12px oklch(0 0 0 / 0.36),
+    0 0 0 4px oklch(0.529 0.07 178.573 / 0.08);
+  transition:
+    transform 120ms var(--motion-ease-out),
+    box-shadow 120ms var(--motion-ease-out),
+    border-color 120ms var(--motion-ease-out);
+}
+.settings-range:hover::-webkit-slider-thumb,
+.filterbar__range:hover::-webkit-slider-thumb,
+.settings-range:focus-visible::-webkit-slider-thumb,
+.filterbar__range:focus-visible::-webkit-slider-thumb,
+.settings-range.is-adjusting::-webkit-slider-thumb,
+.filterbar__range.is-adjusting::-webkit-slider-thumb {
+  border-color: oklch(0.701 0.099 177.349 / 0.72);
+  box-shadow:
+    0 5px 16px oklch(0 0 0 / 0.44),
+    0 0 0 5px oklch(0.529 0.07 178.573 / 0.14);
+}
+.settings-range:active::-webkit-slider-thumb,
+.filterbar__range:active::-webkit-slider-thumb,
+.settings-range.is-adjusting::-webkit-slider-thumb,
+.filterbar__range.is-adjusting::-webkit-slider-thumb {
+  transform: scale(1.08);
+}
+.settings-range::-moz-range-track,
+.filterbar__range::-moz-range-track {
+  height: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--range-track-border);
+  background: var(--range-track);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.055),
+    inset 0 -1px 0 oklch(0 0 0 / 0.22);
+}
+.settings-range::-moz-range-progress,
+.filterbar__range::-moz-range-progress {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--range-fill);
+}
+.settings-range::-moz-range-thumb,
+.filterbar__range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid var(--range-thumb-border);
+  background: var(--range-thumb);
+  box-shadow:
+    0 4px 12px oklch(0 0 0 / 0.36),
+    0 0 0 4px oklch(0.529 0.07 178.573 / 0.08);
+  transition:
+    transform 120ms var(--motion-ease-out),
+    box-shadow 120ms var(--motion-ease-out),
+    border-color 120ms var(--motion-ease-out);
+}
+.settings-range:hover::-moz-range-thumb,
+.filterbar__range:hover::-moz-range-thumb,
+.settings-range:focus-visible::-moz-range-thumb,
+.filterbar__range:focus-visible::-moz-range-thumb,
+.settings-range.is-adjusting::-moz-range-thumb,
+.filterbar__range.is-adjusting::-moz-range-thumb {
+  border-color: oklch(0.701 0.099 177.349 / 0.72);
+  box-shadow:
+    0 5px 16px oklch(0 0 0 / 0.44),
+    0 0 0 5px oklch(0.529 0.07 178.573 / 0.14);
+}
+.settings-range:active::-moz-range-thumb,
+.filterbar__range:active::-moz-range-thumb,
+.settings-range.is-adjusting::-moz-range-thumb,
+.filterbar__range.is-adjusting::-moz-range-thumb {
+  transform: scale(1.08);
+}
+.settings-range:focus-visible,
+.filterbar__range:focus-visible {
+  outline: none;
+}
+.settings-range:focus-visible::-webkit-slider-runnable-track,
+.filterbar__range:focus-visible::-webkit-slider-runnable-track {
+  border-color: oklch(0.701 0.099 177.349 / 0.7);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.055),
+    inset 0 -1px 0 oklch(0 0 0 / 0.22),
+    0 0 0 3px oklch(0.529 0.07 178.573 / 0.14);
+}
+.settings-range:focus-visible::-moz-range-track,
+.filterbar__range:focus-visible::-moz-range-track {
+  border-color: oklch(0.701 0.099 177.349 / 0.7);
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.055),
+    inset 0 -1px 0 oklch(0 0 0 / 0.22),
+    0 0 0 3px oklch(0.529 0.07 178.573 / 0.14);
 }
 .settings-group--toggles {
   gap: 8px;
@@ -833,8 +1019,27 @@ body {
   cursor: grab;
   touch-action: none;
   z-index: 1;
+  opacity: 1;
+  transform: scale(1);
+  transform-origin: center;
+  filter: none;
+  transition:
+    opacity 460ms var(--motion-ease-out),
+    transform 460ms var(--motion-ease-out),
+    filter 460ms var(--motion-ease-out);
+  will-change: opacity, transform, filter;
 }
 .viewport__canvas.panning { cursor: grabbing; }
+body.viewer-loading .viewport__canvas {
+  opacity: 0;
+  transform: scale(0.985);
+  filter: blur(8px);
+}
+body.viewer-loading .hud-actions {
+  opacity: 0;
+  transform: translateX(-50%) translateY(14px) scale(0.97);
+  filter: blur(6px);
+}
 
 /* Canvas raster layer: the performance workhorse for 12k+ nodes.
    Sits behind the SVG overlay. */
@@ -1562,12 +1767,96 @@ body {
    =================================================================== */
 .empty-state, .loading-state {
   position: absolute; inset: 0;
+  z-index: 45;
   display: flex; align-items: center; justify-content: center;
   font-family: var(--font-ui);
   color: var(--text-dim); font-size: 14px;
   pointer-events: none;
 }
-.loading-state { background: var(--bg); }
+.loading-state {
+  flex-direction: column;
+  gap: 18px;
+  background: var(--bg);
+  opacity: 1;
+  transition: opacity 240ms var(--motion-ease-out);
+  will-change: opacity;
+}
+.loading-state[data-closing="true"] {
+  opacity: 0;
+}
+.loading-state__loaders {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+}
+.loading-state__text {
+  margin: 0;
+}
+.spiral-loader {
+  --spiral-size: 24px;
+  position: relative;
+  display: block;
+  width: var(--spiral-size);
+  height: var(--spiral-size);
+  flex: 0 0 auto;
+  color: oklch(0.934 0.012 91.522);
+}
+.spiral-loader__phase {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  opacity: 0;
+}
+.spiral-loader__phase--fast {
+  animation: spiral-loader-fast-phase 4000ms steps(1, end) infinite;
+}
+.spiral-loader__phase--slow {
+  animation: spiral-loader-slow-phase 4000ms steps(1, end) infinite;
+}
+.spiral-loader__motion {
+  transform: translate(-0.5px, 1.5px);
+}
+.spiral-loader__phase--fast .spiral-loader__motion {
+  animation: spiral-loader-slide 500ms cubic-bezier(0.167, 0.167, 0.833, 0.833) infinite;
+}
+.spiral-loader__phase--slow .spiral-loader__motion {
+  animation: spiral-loader-slide 1000ms cubic-bezier(0.167, 0.167, 0.833, 0.833) infinite;
+}
+.spiral-loader__path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.24;
+  stroke-dasharray: 21 100;
+  stroke-dashoffset: -23;
+}
+.spiral-loader__phase--fast .spiral-loader__path {
+  animation: spiral-loader-trim 500ms cubic-bezier(0.32, 0.154, 0.826, 0.579) infinite;
+}
+.spiral-loader__phase--slow .spiral-loader__path {
+  animation: spiral-loader-trim 1000ms cubic-bezier(0.32, 0.313, 0.826, 0.143) infinite;
+}
+@keyframes spiral-loader-fast-phase {
+  0%, 49.999% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+@keyframes spiral-loader-slow-phase {
+  0%, 49.999% { opacity: 0; }
+  50%, 100% { opacity: 1; }
+}
+@keyframes spiral-loader-slide {
+  from { transform: translate(-0.5px, 1.5px); }
+  to { transform: translate(-8.5px, 1.5px); }
+}
+@keyframes spiral-loader-trim {
+  from { stroke-dashoffset: -23; }
+  to { stroke-dashoffset: -57; }
+}
 
 @media (hover: hover) and (pointer: fine) {
   .search-field__clear:hover { color: var(--text); background: oklch(1 0 0 / 0.045); }
@@ -1635,6 +1924,15 @@ body {
   .t-shimmer::before {
     animation: none !important;
   }
+  .spiral-loader__phase,
+  .spiral-loader__motion,
+  .spiral-loader__path {
+    animation: none !important;
+  }
+  .spiral-loader__phase--fast { opacity: 1; }
+  .spiral-loader__phase--slow { opacity: 0; }
+  .spiral-loader__motion { transform: translate(-4.5px, 1.5px); }
+  .spiral-loader__path { stroke-dashoffset: -40; }
   .t-icon-swap .t-icon,
   .t-panel-slide,
   .filter-panel,
@@ -1650,6 +1948,7 @@ body {
   .hud-btn,
   .filterbar__select,
   .filterbar__range,
+  .settings-range,
   .filterbar__clear,
   .minimap,
   .domain-label,
@@ -1683,6 +1982,14 @@ VIEWER_SFX_JS = """\
 
   const STORAGE_KEY = "traccia-viewer-sound-enabled-v2";
   const RATE_LIMIT_MS = 60; // prevent overlapping one-shots for the same event
+  const SLIDER_TICK_VOLUME = 0.42;
+  const SLIDER_TICK_FREQ = 5500;
+  const SLIDER_TICK_DECAY_SEC = 0.006;
+  const SLIDER_NOISE_DURATION_SEC = 0.002;
+  const SLIDER_NOISE_LEVEL = 0.85;
+  const SLIDER_NOISE_Q = 18;
+  const SLIDER_TICK_MIN_GAP_SEC = 0.04;
+  const SLIDER_MAX_QUEUE_AHEAD_SEC = 0.04;
 
   class SfxEngine {
     constructor() {
@@ -1693,6 +2000,9 @@ VIEWER_SFX_JS = """\
       this._reducedMotion = window.matchMedia(
         "(prefers-reduced-motion: reduce)"
       ).matches;
+      this._noiseBuffer = null;
+      this._nextSliderTickTime = 0;
+      this._pendingSliderTicks = [];
     }
 
     _readStoredPreference() {
@@ -1802,6 +2112,74 @@ VIEWER_SFX_JS = """\
       osc.stop(now + oscConfig.duration + 0.02);
     }
 
+    _getNoiseBuffer() {
+      if (this._noiseBuffer || !this._ctx) return this._noiseBuffer;
+      const samples = Math.floor(this._ctx.sampleRate * 0.5);
+      this._noiseBuffer = this._ctx.createBuffer(1, samples, this._ctx.sampleRate);
+      const data = this._noiseBuffer.getChannelData(0);
+      for (let i = 0; i < samples; i += 1) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      return this._noiseBuffer;
+    }
+
+    _scheduleSliderTick(when) {
+      if (!this._ctx || !this._master) return;
+
+      const tickGain = this._ctx.createGain();
+      tickGain.gain.value = SLIDER_TICK_VOLUME;
+      tickGain.connect(this._master);
+
+      const osc = this._ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = SLIDER_TICK_FREQ;
+      const oscEnv = this._ctx.createGain();
+      oscEnv.gain.setValueAtTime(1, when);
+      oscEnv.gain.exponentialRampToValueAtTime(0.0005, when + SLIDER_TICK_DECAY_SEC);
+      osc.connect(oscEnv).connect(tickGain);
+      osc.start(when);
+      osc.stop(when + SLIDER_TICK_DECAY_SEC + 0.02);
+
+      const noise = this._ctx.createBufferSource();
+      noise.buffer = this._getNoiseBuffer();
+      const noiseGain = this._ctx.createGain();
+      noiseGain.gain.setValueAtTime(SLIDER_NOISE_LEVEL, when);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0005, when + SLIDER_NOISE_DURATION_SEC);
+      const filter = this._ctx.createBiquadFilter();
+      filter.type = "bandpass";
+      filter.frequency.value = SLIDER_TICK_FREQ;
+      filter.Q.value = SLIDER_NOISE_Q;
+      noise.connect(noiseGain).connect(filter).connect(tickGain);
+      noise.start(when);
+      noise.stop(when + SLIDER_NOISE_DURATION_SEC + 0.01);
+
+      this._pendingSliderTicks.push({ when, osc, noise });
+    }
+
+    cancelSliderTicks() {
+      if (!this._ctx) return;
+      const now = this._ctx.currentTime;
+      this._pendingSliderTicks.forEach(function (tick) {
+        if (tick.when <= now) return;
+        try { tick.osc.stop(); } catch (_e) {}
+        try { tick.noise.stop(); } catch (_e) {}
+      });
+      this._pendingSliderTicks = [];
+      this._nextSliderTickTime = now;
+    }
+
+    /** Lisse-inspired slider detent: 5.5kHz partial + tiny filtered-noise tick. */
+    sliderTick() {
+      if (!this._enabled || this._reducedMotion) return;
+      this._ensureContext();
+      if (!this._ctx || !this._master) return;
+      const now = this._ctx.currentTime;
+      const when = Math.max(now, this._nextSliderTickTime);
+      if (when - now > SLIDER_MAX_QUEUE_AHEAD_SEC) return;
+      this._scheduleSliderTick(when);
+      this._nextSliderTickTime = when + SLIDER_TICK_MIN_GAP_SEC;
+    }
+
     /** Soft two-layer tick for node select / deep-link focus (~60-110ms). */
     nodeSelect() {
       if (!this._rateLimited("select")) return;
@@ -1865,6 +2243,16 @@ VIEWER_SFX_JS = """\
         { type: "square", frequency: 1200, duration: 0.03 },
         { peak: 0.04, attack: 0.001 },
         { type: "lowpass", frequency: 4000, Q: 2 }
+      );
+    }
+
+    /** Small tactile tap for bottom dock buttons (~35-55ms). */
+    dockButton() {
+      if (!this._rateLimited("dock")) return;
+      this._play(
+        { type: "triangle", frequency: 760, frequencyEnd: 980, duration: 0.045 },
+        { peak: 0.045, attack: 0.0015 },
+        { type: "lowpass", frequency: 2600, Q: 1.2 }
       );
     }
   }
@@ -2213,6 +2601,7 @@ VIEWER_JS = """\
   // --- SFX ---
   const sfx = new window.SfxEngine();
   const DATA_VERSION = "20260624-focus-field-1";
+  const LOADING_EXIT_MS = 260;
   const DRAG_SELECT_THRESHOLD = 5;
 
   // --- DOM refs ---
@@ -2225,7 +2614,7 @@ VIEWER_JS = """\
       "graph-edges", "graph-nodes", "search-toggle", "search-panel",
       "search-input", "search-clear",
       "filter-domain", "filter-status", "filter-freshness", "filter-scope",
-      "filter-confidence", "filter-evidence", "filter-clear", "filter-toggle",
+      "filter-confidence", "filter-confidence-value", "filter-evidence", "filter-clear", "filter-toggle",
       "settings-toggle", "settings-panel", "setting-dim", "setting-dim-value",
       "setting-node-size", "setting-node-size-value", "setting-line-strength",
       "setting-line-strength-value", "setting-label-density", "setting-label-density-value",
@@ -2236,7 +2625,7 @@ VIEWER_JS = """\
       "action-dock", "toolbar-indicator", "minimap-toggle", "sound-toggle", "reset-view",
       "drawer", "drawer-title", "drawer-body", "drawer-close",
       "sheet", "sheet-title", "sheet-body", "sheet-close",
-      "empty-state", "loading-state", "filter-bar",
+      "empty-state", "loading-state", "loading-message", "filter-bar",
     ].forEach(function (id) {
       dom[id.replace(/-/g, "_")] = $(id);
     });
@@ -2276,8 +2665,7 @@ VIEWER_JS = """\
       resetView();
       handleDeepLink();
 
-      document.body.classList.remove("viewer-loading");
-      dom.loading_state.hidden = true;
+      finishLoading();
       updateEmptyState();
     } catch (err) {
       console.error("Skill map initialization failed during " + loadStage + ".", err);
@@ -2286,8 +2674,35 @@ VIEWER_JS = """\
   }
 
   function showError(msg) {
-    dom.loading_state.textContent = msg;
+    if (dom.loading_state) {
+      delete dom.loading_state.dataset.closing;
+    }
+    setLoadingMessage(msg);
     dom.loading_state.hidden = false;
+  }
+
+  function finishLoading() {
+    document.body.classList.remove("viewer-loading");
+    if (!dom.loading_state) return;
+    dom.loading_state.dataset.closing = "true";
+    var delay = prefersReducedMotion() ? 0 : LOADING_EXIT_MS;
+    window.setTimeout(function () {
+      dom.loading_state.hidden = true;
+      delete dom.loading_state.dataset.closing;
+    }, delay);
+  }
+
+  function prefersReducedMotion() {
+    return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  function setLoadingMessage(msg) {
+    if (!dom.loading_message) {
+      dom.loading_state.textContent = msg;
+      return;
+    }
+    dom.loading_message.textContent = msg;
+    dom.loading_message.dataset.text = msg;
   }
 
   // --- Canvas setup ---
@@ -4966,18 +5381,373 @@ VIEWER_JS = """\
     return Math.round(value * 100) + "%";
   }
 
+  function syncRangeProgress(el) {
+    if (!el) return;
+    var min = Number(el.min || 0);
+    var max = Number(el.max || 100);
+    var value = Number(el.value || 0);
+    var span = max - min;
+    var pct = span === 0 ? 0 : ((value - min) / span) * 100;
+    el.style.setProperty("--range-progress", Math.max(0, Math.min(100, pct)) + "%");
+  }
+
+  var NUMERIC_TEXT_READOUT_TRANSITION = { duration: 300 };
+  var NUMERIC_TEXT_DEFAULT_TRANSITION = {
+    duration: 550,
+    easing: "linear(0,.1052,.3155,.532,.7112,.8414,.9265,.9765,1.0023,1.013,1.0151,1.0133,1.01,1.0068,1.0041,1.0022,1.001,1)",
+  };
+  var NUMERIC_TEXT_MOTION = {
+    y: 0.35,
+    scale: 0.6,
+    blur: 0.1,
+    rotate: 2,
+    stagger: 0.3,
+  };
+  var NUMERIC_TEXT_SHADOW_CSS = [
+    ":host{position:relative;display:inline-flex;white-space:nowrap!important;isolation:isolate;}",
+    "span{margin:0!important;padding:0!important;transform-origin:center;}",
+    "[inert]{position:absolute!important;display:inline-flex!important;will-change:transform;z-index:0;}",
+    ".section{position:relative!important;display:inline-flex!important;will-change:transform;z-index:1;}",
+    ".char{display:inline-block!important;white-space:pre!important;}",
+  ].join("");
+
+  function numericTextCreate(tagName, className, text) {
+    var el = document.createElement(tagName);
+    el.setAttribute("aria-hidden", "true");
+    if (className) el.className = className;
+    if (text) el.textContent = text;
+    return el;
+  }
+
+  function numericTextRect(el) {
+    return el.getBoundingClientRect();
+  }
+
+  function numericTextCancel(el) {
+    Array.from(el.getAnimations()).forEach(function (animation) {
+      animation.cancel();
+    });
+  }
+
+  function numericTextSlideSection(el, dx, transition) {
+    if (!dx || typeof el.animate !== "function") return;
+    numericTextCancel(el);
+    el.animate({ transform: ["translateX(" + dx + "px)", ""] }, {
+      duration: transition.duration,
+      easing: transition.easing,
+      fill: "both",
+    });
+  }
+
+  var numericTextSegmenter = window.Intl && Intl.Segmenter ?
+    new Intl.Segmenter(undefined, { granularity: "grapheme" }) :
+    null;
+
+  function numericTextSegments(value) {
+    var text = String(value);
+    if (numericTextSegmenter) {
+      return Array.from(numericTextSegmenter.segment(text), function (part) {
+        return part.segment === " " ? "\\u00a0" : part.segment;
+      });
+    }
+    return Array.from(text, function (char) {
+      return char === " " ? "\\u00a0" : char;
+    });
+  }
+
+  function numericTextDiff(currentChars, nextValue) {
+    var nextChars = numericTextSegments(nextValue);
+    var currentLength = currentChars.length;
+    var nextLength = nextChars.length;
+    var prefixCount = 0;
+    while (
+      prefixCount < currentLength &&
+      prefixCount < nextLength &&
+      currentChars[prefixCount].textContent === nextChars[prefixCount]
+    ) {
+      prefixCount += 1;
+    }
+
+    var suffixCount = 0;
+    var maxSuffix = Math.min(currentLength - prefixCount, nextLength - prefixCount);
+    while (
+      suffixCount < maxSuffix &&
+      currentChars[currentLength - 1 - suffixCount].textContent ===
+        nextChars[nextLength - 1 - suffixCount]
+    ) {
+      suffixCount += 1;
+    }
+
+    return {
+      prefixCount: prefixCount,
+      suffixCount: suffixCount,
+      middleLabels: nextChars.slice(prefixCount, nextLength - suffixCount),
+    };
+  }
+
+  class TracciaNumericText extends HTMLElement {
+    constructor() {
+      super();
+      this._prefix = numericTextCreate("span", "section");
+      this._middle = numericTextCreate("span", "section");
+      this._suffix = numericTextCreate("span", "section");
+      this._chars = [];
+      this._exitingChars = [];
+      this._isRTL = false;
+      this._value = "";
+      this._prevValue = "";
+      this.transition = Object.assign({}, NUMERIC_TEXT_DEFAULT_TRANSITION);
+      this.trend = 0;
+      this.respectMotionPreference = true;
+
+      var shadow = this.attachShadow({ mode: "open" });
+      var style = document.createElement("style");
+      style.textContent = NUMERIC_TEXT_SHADOW_CSS;
+      shadow.append(style, this._prefix, this._middle, this._suffix);
+    }
+
+    connectedCallback() {
+      this._isRTL = getComputedStyle(this).direction === "rtl";
+      this._render(false);
+    }
+
+    get value() {
+      return this._value;
+    }
+
+    set value(next) {
+      this.update(next, false);
+    }
+
+    setOptions(options) {
+      if (options.transition) {
+        this.transition = Object.assign({}, NUMERIC_TEXT_DEFAULT_TRANSITION, options.transition);
+      }
+      if (typeof options.trend === "number") this.trend = options.trend;
+      if (typeof options.respectMotionPreference === "boolean") {
+        this.respectMotionPreference = options.respectMotionPreference;
+      }
+    }
+
+    update(next, animated) {
+      next = String(next);
+      if (next === this._value) return;
+      this._prevValue = this._value;
+      this._value = next;
+      var shouldAnimate = animated !== false &&
+        !(this.respectMotionPreference && prefersReducedMotion());
+      this._render(shouldAnimate);
+    }
+
+    _render(animated) {
+      var diff = numericTextDiff(this._chars, this._value);
+      var prefixCount = diff.prefixCount;
+      var suffixCount = diff.suffixCount;
+      var middleLabels = diff.middleLabels;
+      var middleLength = middleLabels.length;
+      var oldMiddleEnd = this._chars.length - suffixCount;
+      var nextLength = prefixCount + middleLength + suffixCount;
+
+      if (!animated) {
+        var nextChars = new Array(nextLength);
+        var nextMiddleEnd = prefixCount + middleLength;
+        for (var i = 0; i < prefixCount; i += 1) nextChars[i] = this._chars[i];
+        for (var j = 0; j < middleLength; j += 1) {
+          nextChars[prefixCount + j] = numericTextCreate("span", "char", middleLabels[j]);
+        }
+        for (var k = 0; k < suffixCount; k += 1) {
+          nextChars[nextMiddleEnd + k] = this._chars[oldMiddleEnd + k];
+        }
+        for (var removeIndex = prefixCount; removeIndex < oldMiddleEnd; removeIndex += 1) {
+          this._chars[removeIndex].remove();
+        }
+        this._prefix.replaceChildren.apply(this._prefix, nextChars.slice(0, prefixCount));
+        this._middle.replaceChildren.apply(this._middle, nextChars.slice(prefixCount, nextMiddleEnd));
+        this._suffix.replaceChildren.apply(this._suffix, nextChars.slice(nextMiddleEnd));
+        this._chars = nextChars;
+        return;
+      }
+
+      var trend = this.trend;
+      if (!trend) {
+        var currentNumber = parseFloat(this._value);
+        var previousNumber = parseFloat(this._prevValue);
+        trend = !Number.isNaN(currentNumber) && !Number.isNaN(previousNumber) && currentNumber > previousNumber
+          ? 1
+          : -1;
+      }
+
+      var beforePrefixRect = numericTextRect(this._prefix);
+      var beforeMiddleRect = numericTextRect(this._middle);
+      var beforeSuffixRect = numericTextRect(this._suffix);
+      var exitX = 0;
+      if (prefixCount < oldMiddleEnd) {
+        var firstExit = this._chars[prefixCount];
+        var exitParent = firstExit.parentElement;
+        var parentRect = exitParent === this._prefix ? beforePrefixRect :
+          exitParent === this._suffix ? beforeSuffixRect :
+            beforeMiddleRect;
+        exitX = this._isRTL
+          ? parentRect.left + firstExit.offsetLeft + firstExit.offsetWidth
+          : parentRect.left + firstExit.offsetLeft;
+      }
+
+      var updatedChars = new Array(nextLength);
+      var exitingChars = [];
+      for (var prefixIndex = 0; prefixIndex < prefixCount; prefixIndex += 1) {
+        updatedChars[prefixIndex] = this._chars[prefixIndex];
+      }
+      for (var exitIndex = prefixCount; exitIndex < oldMiddleEnd; exitIndex += 1) {
+        exitingChars.push(this._chars[exitIndex]);
+      }
+      var enteringChars = new Array(middleLength);
+      for (var middleIndex = 0; middleIndex < middleLength; middleIndex += 1) {
+        var char = numericTextCreate("span", "char", middleLabels[middleIndex]);
+        enteringChars[middleIndex] = char;
+        updatedChars[prefixCount + middleIndex] = char;
+      }
+      var suffixStart = prefixCount + middleLength;
+      for (var suffixIndex = 0; suffixIndex < suffixCount; suffixIndex += 1) {
+        updatedChars[suffixStart + suffixIndex] = this._chars[oldMiddleEnd + suffixIndex];
+      }
+
+      if (exitingChars.length) {
+        var exitLayer = numericTextCreate("span");
+        exitLayer.toggleAttribute("inert", true);
+        exitingChars.forEach(function (char) { exitLayer.appendChild(char); });
+        var exitRecord = [exitLayer, exitX];
+        this._exitingChars.push(exitRecord);
+        this.shadowRoot.appendChild(exitLayer);
+        var remaining = exitingChars.length;
+        var exitStagger = this._getStagger(exitingChars);
+        var self = this;
+        exitingChars.forEach(function (char, index) {
+          self._animateChar(char, true, trend, index * exitStagger, function () {
+            char.remove();
+            remaining -= 1;
+            if (remaining === 0) {
+              exitLayer.remove();
+              var recordIndex = self._exitingChars.indexOf(exitRecord);
+              if (recordIndex !== -1) self._exitingChars.splice(recordIndex, 1);
+            }
+          });
+        });
+      }
+
+      this._prefix.replaceChildren.apply(this._prefix, updatedChars.slice(0, prefixCount));
+      this._middle.replaceChildren.apply(this._middle, enteringChars);
+      this._suffix.replaceChildren.apply(this._suffix, updatedChars.slice(suffixStart));
+      this._chars = updatedChars;
+
+      numericTextCancel(this._prefix);
+      numericTextCancel(this._suffix);
+      var afterPrefixRect = numericTextRect(this._prefix);
+      var afterSuffixRect = numericTextRect(this._suffix);
+      var currentLeft = this._isRTL ? afterPrefixRect.right : afterPrefixRect.left;
+      this._exitingChars.forEach(function (record) {
+        var exitLayer = record[0];
+        var previousX = record[1];
+        exitLayer.style.transform = "translateX(" + (previousX - currentLeft) + "px)";
+      });
+
+      var enterStagger = this._getStagger(enteringChars);
+      for (var enterIndex = 0; enterIndex < enteringChars.length; enterIndex += 1) {
+        this._animateChar(enteringChars[enterIndex], false, trend, enterIndex * enterStagger);
+      }
+      numericTextSlideSection(
+        this._prefix,
+        this._getEdgeDx(beforePrefixRect, afterPrefixRect, beforeMiddleRect, true),
+        this.transition
+      );
+      numericTextSlideSection(
+        this._suffix,
+        this._getEdgeDx(beforeSuffixRect, afterSuffixRect, beforeMiddleRect, false),
+        this.transition
+      );
+    }
+
+    _getStagger(chars) {
+      var visibleCount = 0;
+      chars.forEach(function (char) {
+        if (char.textContent !== "\\u00a0") visibleCount += 1;
+      });
+      return this.transition.duration * NUMERIC_TEXT_MOTION.stagger / (visibleCount || 1);
+    }
+
+    _getEdgeDx(beforeRect, afterRect, middleRect, isPrefix) {
+      if (this._isRTL === isPrefix) {
+        return (beforeRect.width ? beforeRect.right : middleRect.right) - afterRect.right;
+      }
+      return (beforeRect.width ? beforeRect.left : middleRect.left) - afterRect.left;
+    }
+
+    _animateChar(char, exiting, trend, delay, onfinish) {
+      if (char.textContent === "\\u00a0" || typeof char.animate !== "function") {
+        if (exiting && onfinish) window.setTimeout(onfinish, this.transition.duration + delay);
+        return;
+      }
+      var displaced = "translateY(" +
+        ((exiting ? -1 : 1) * trend * NUMERIC_TEXT_MOTION.y) +
+        "em) scale(" + NUMERIC_TEXT_MOTION.scale + ") rotateZ(" +
+        NUMERIC_TEXT_MOTION.rotate + "deg)";
+      var blurred = "blur(" + NUMERIC_TEXT_MOTION.blur + "em)";
+      var keyframes = exiting
+        ? { opacity: 0, transform: displaced, filter: blurred }
+        : { opacity: [0, 1], transform: [displaced, ""], filter: [blurred, ""] };
+      var animation = char.animate(keyframes, {
+        duration: this.transition.duration,
+        easing: this.transition.easing,
+        fill: "both",
+        delay: delay,
+      });
+      if (onfinish) animation.onfinish = onfinish;
+    }
+  }
+
+  if (!customElements.get("traccia-numeric-text")) {
+    customElements.define("traccia-numeric-text", TracciaNumericText);
+  }
+
+  function renderNumericText(el, text) {
+    if (!el) return;
+    text = String(text);
+    var previous = el.dataset.outputText || "";
+    var readout = el.querySelector("traccia-numeric-text");
+    if (!readout) {
+      readout = document.createElement("traccia-numeric-text");
+      readout.setAttribute("role", "img");
+      readout.className = "numeric-text-readout";
+      readout.setOptions({ transition: NUMERIC_TEXT_READOUT_TRANSITION });
+      el.replaceChildren(readout);
+    }
+    var shouldAnimate = previous !== text && !document.body.classList.contains("viewer-loading");
+    el.dataset.outputText = text;
+    el.setAttribute("aria-label", text);
+    readout.setAttribute("aria-label", text);
+    readout.update(text, shouldAnimate);
+  }
+
+  function setSettingsOutput(el, text) {
+    renderNumericText(el, text);
+  }
+
   function syncSettingsControls() {
     if (!dom.setting_dim) return;
     dom.setting_dim.value = String(viewSettings.contextDimming);
-    dom.setting_dim_value.value = percentText(viewSettings.contextDimming);
+    syncRangeProgress(dom.setting_dim);
+    setSettingsOutput(dom.setting_dim_value, percentText(viewSettings.contextDimming));
     dom.setting_node_size.value = String(viewSettings.nodeScale);
-    dom.setting_node_size_value.value = percentText(viewSettings.nodeScale);
+    syncRangeProgress(dom.setting_node_size);
+    setSettingsOutput(dom.setting_node_size_value, percentText(viewSettings.nodeScale));
     dom.setting_line_strength.value = String(viewSettings.lineStrength);
-    dom.setting_line_strength_value.value = percentText(viewSettings.lineStrength);
+    syncRangeProgress(dom.setting_line_strength);
+    setSettingsOutput(dom.setting_line_strength_value, percentText(viewSettings.lineStrength));
     dom.setting_label_density.value = String(viewSettings.labelDensity);
-    dom.setting_label_density_value.value = percentText(viewSettings.labelDensity);
+    syncRangeProgress(dom.setting_label_density);
+    setSettingsOutput(dom.setting_label_density_value, percentText(viewSettings.labelDensity));
     dom.setting_separation.value = String(viewSettings.separation);
-    dom.setting_separation_value.value = percentText(viewSettings.separation);
+    syncRangeProgress(dom.setting_separation);
+    setSettingsOutput(dom.setting_separation_value, percentText(viewSettings.separation));
     if (dom.setting_show_lines) dom.setting_show_lines.checked = !!viewSettings.showLines;
     if (dom.setting_show_categories) dom.setting_show_categories.checked = !!viewSettings.showCategories;
     if (dom.setting_show_category_labels) dom.setting_show_category_labels.checked = !!viewSettings.showCategoryLabels;
@@ -6167,6 +6937,8 @@ VIEWER_JS = """\
     dom.filter_freshness.value = filters.freshness;
     dom.filter_scope.value = String(filters.maxSkills);
     dom.filter_confidence.value = filters.minConfidence;
+    syncRangeProgress(dom.filter_confidence);
+    renderNumericText(dom.filter_confidence_value, percentText(filters.minConfidence));
     dom.filter_evidence.value = filters.evidenceType;
   }
 
@@ -6593,8 +7365,6 @@ VIEWER_JS = """\
       var targetRect = target.getBoundingClientRect();
       dom.action_dock.style.setProperty("--toolbar-indicator-x", (targetRect.left - dockRect.left) + "px");
       dom.action_dock.style.setProperty("--toolbar-indicator-y", (targetRect.top - dockRect.top) + "px");
-      dom.action_dock.style.setProperty("--toolbar-indicator-width", targetRect.width + "px");
-      dom.action_dock.style.setProperty("--toolbar-indicator-height", targetRect.height + "px");
       dom.action_dock.style.setProperty("--toolbar-indicator-opacity", "1");
     }
     function syncActiveToolbarIndicator() {
@@ -6638,6 +7408,7 @@ VIEWER_JS = """\
     }
     if (dom.search_toggle) {
       dom.search_toggle.addEventListener("click", function () {
+        sfx.dockButton();
         setPanelOpen(dom.filter_bar, false);
         setPanelOpen(dom.settings_panel, false);
         setPanelOpen(dom.legend, false);
@@ -6654,12 +7425,38 @@ VIEWER_JS = """\
     initToolbarDockMotion();
 
     // Filters
+    function seedRangeTick(el) {
+      if (!el) return;
+      el.dataset.lastSliderTickValue = String(el.value);
+      el.classList.add("is-adjusting");
+    }
+    function releaseRangeTick(el) {
+      if (!el) return;
+      el.classList.remove("is-adjusting");
+      delete el.dataset.lastSliderTickValue;
+      sfx.cancelSliderTicks();
+    }
+    function playRangeTick(el) {
+      if (!el) return;
+      var next = Number(el.value);
+      var previous = Number(el.dataset.lastSliderTickValue);
+      if (!Number.isFinite(next)) return;
+      if (!Number.isFinite(previous)) {
+        el.dataset.lastSliderTickValue = String(next);
+        return;
+      }
+      if (next === previous) return;
+      el.dataset.lastSliderTickValue = String(next);
+      sfx.sliderTick();
+    }
     function onFilterChange() {
       filters.domain = dom.filter_domain.value;
       filters.status = dom.filter_status.value;
       filters.freshness = dom.filter_freshness.value;
       filters.maxSkills = parseScopeLimit(dom.filter_scope.value);
       filters.minConfidence = parseFloat(dom.filter_confidence.value);
+      syncRangeProgress(dom.filter_confidence);
+      renderNumericText(dom.filter_confidence_value, percentText(filters.minConfidence));
       filters.evidenceType = dom.filter_evidence.value;
       clearCommittedFocus(false);
       layoutAndRender();
@@ -6673,11 +7470,28 @@ VIEWER_JS = """\
       dom.filter_scope.addEventListener(evt, onFilterChange);
       dom.filter_evidence.addEventListener(evt, onFilterChange);
     });
+    dom.filter_confidence.addEventListener("pointerdown", function () {
+      sfx.unlock();
+      seedRangeTick(dom.filter_confidence);
+    });
+    dom.filter_confidence.addEventListener("keydown", function (event) {
+      if (!/^(ArrowLeft|ArrowRight|ArrowUp|ArrowDown|Home|End|PageUp|PageDown)$/.test(event.key)) return;
+      sfx.unlock();
+      if (!dom.filter_confidence.dataset.lastSliderTickValue) seedRangeTick(dom.filter_confidence);
+    });
     dom.filter_confidence.addEventListener("input", function () {
       filters.minConfidence = parseFloat(dom.filter_confidence.value);
+      syncRangeProgress(dom.filter_confidence);
+      renderNumericText(dom.filter_confidence_value, percentText(filters.minConfidence));
+      playRangeTick(dom.filter_confidence);
       clearCommittedFocus(false);
       layoutAndRender();
       resetView(true);
+    });
+    ["change", "pointerup", "lostpointercapture", "blur"].forEach(function (eventName) {
+      dom.filter_confidence.addEventListener(eventName, function () {
+        releaseRangeTick(dom.filter_confidence);
+      });
     });
     dom.filter_clear.addEventListener("click", function () {
       dom.filter_domain.value = "";
@@ -6702,6 +7516,7 @@ VIEWER_JS = """\
     // Filter panel toggle
     if (dom.filter_toggle) {
       dom.filter_toggle.addEventListener("click", function () {
+        sfx.dockButton();
         setPanelOpen(dom.search_panel, false);
         setPanelOpen(dom.settings_panel, false);
         setPanelOpen(dom.legend, false);
@@ -6714,8 +7529,19 @@ VIEWER_JS = """\
     var separationTimer = null;
     function bindSettingRange(el, key, recomputeLayout) {
       if (!el) return;
+      el.addEventListener("pointerdown", function () {
+        sfx.unlock();
+        seedRangeTick(el);
+      });
+      el.addEventListener("keydown", function (event) {
+        if (!/^(ArrowLeft|ArrowRight|ArrowUp|ArrowDown|Home|End|PageUp|PageDown)$/.test(event.key)) return;
+        sfx.unlock();
+        if (!el.dataset.lastSliderTickValue) seedRangeTick(el);
+      });
       el.addEventListener("input", function () {
         viewSettings[key] = parseFloat(el.value);
+        syncRangeProgress(el);
+        playRangeTick(el);
         if (recomputeLayout) {
           if (separationTimer) clearTimeout(separationTimer);
           separationTimer = setTimeout(function () {
@@ -6734,7 +7560,11 @@ VIEWER_JS = """\
           separationTimer = null;
         }
         applyViewSettingsChange(recomputeLayout);
+        releaseRangeTick(el);
       });
+      el.addEventListener("pointerup", function () { releaseRangeTick(el); });
+      el.addEventListener("lostpointercapture", function () { releaseRangeTick(el); });
+      el.addEventListener("blur", function () { releaseRangeTick(el); });
     }
     function bindSettingCheckbox(el, key, recomputeLayout) {
       if (!el) return;
@@ -6766,6 +7596,7 @@ VIEWER_JS = """\
     }
     if (dom.settings_toggle) {
       dom.settings_toggle.addEventListener("click", function () {
+        sfx.dockButton();
         setPanelOpen(dom.search_panel, false);
         setPanelOpen(dom.filter_bar, false);
         setPanelOpen(dom.legend, false);
@@ -6776,6 +7607,7 @@ VIEWER_JS = """\
 
     // Toolbar
     dom.legend_toggle.addEventListener("click", function () {
+      sfx.dockButton();
       setPanelOpen(dom.search_panel, false);
       setPanelOpen(dom.filter_bar, false);
       setPanelOpen(dom.settings_panel, false);
@@ -6787,16 +7619,22 @@ VIEWER_JS = """\
       syncToolbarDisclosureButtons();
     });
     dom.minimap_toggle.addEventListener("click", function () {
+      sfx.dockButton();
       var collapsed = dom.minimap.classList.toggle("collapsed");
       dom.minimap_toggle.setAttribute("aria-pressed", String(collapsed));
       syncActiveToolbarIndicator();
     });
     dom.sound_toggle.addEventListener("click", function () {
       var nowOn = !sfx.isEnabled();
+      if (!nowOn) sfx.dockButton();
       sfx.setEnabled(nowOn);
+      if (nowOn) sfx.dockButton();
       updateSoundToggle(nowOn);
     });
-    dom.reset_view.addEventListener("click", function () { resetView(true); });
+    dom.reset_view.addEventListener("click", function () {
+      sfx.dockButton();
+      resetView(true);
+    });
 
     // Drawer/sheet close
     dom.drawer_close.addEventListener("click", closeDrawer);
@@ -7100,7 +7938,21 @@ ADMIN_VIEWER_HTML = """\
 
   <!-- Loading state -->
   <div class="loading-state" id="loading-state">
-    <p>Loading skill map...</p>
+    <div class="loading-state__loaders" aria-hidden="true">
+      <span class="spiral-loader" style="--spiral-size: 24px">
+        <svg class="spiral-loader__phase spiral-loader__phase--fast" viewBox="0 0 16 16" focusable="false">
+          <g class="spiral-loader__motion">
+            <path class="spiral-loader__path" pathLength="100" d="M0.500 12.500 C4.952 12.500 7.236 8.784 7.525 5.488 C7.755 2.861 6.718 0.500 4.500 0.500 C2.282 0.500 1.245 2.861 1.475 5.488 C1.764 8.784 4.048 12.500 8.500 12.500 C12.952 12.500 15.236 8.784 15.525 5.488 C15.755 2.861 14.718 0.500 12.500 0.500 C10.282 0.500 9.245 2.861 9.475 5.488 C9.764 8.784 12.048 12.500 16.500 12.500 C20.952 12.500 23.236 8.784 23.525 5.488 C23.755 2.861 22.718 0.500 20.500 0.500 C18.282 0.500 17.248 2.861 17.480 5.488 C17.772 8.784 20.057 12.500 24.500 12.500"></path>
+          </g>
+        </svg>
+        <svg class="spiral-loader__phase spiral-loader__phase--slow" viewBox="0 0 16 16" focusable="false">
+          <g class="spiral-loader__motion">
+            <path class="spiral-loader__path" pathLength="100" d="M0.500 12.500 C4.952 12.500 7.236 8.784 7.525 5.488 C7.755 2.861 6.718 0.500 4.500 0.500 C2.282 0.500 1.245 2.861 1.475 5.488 C1.764 8.784 4.048 12.500 8.500 12.500 C12.952 12.500 15.236 8.784 15.525 5.488 C15.755 2.861 14.718 0.500 12.500 0.500 C10.282 0.500 9.245 2.861 9.475 5.488 C9.764 8.784 12.048 12.500 16.500 12.500 C20.952 12.500 23.236 8.784 23.525 5.488 C23.755 2.861 22.718 0.500 20.500 0.500 C18.282 0.500 17.248 2.861 17.480 5.488 C17.772 8.784 20.057 12.500 24.500 12.500"></path>
+          </g>
+        </svg>
+      </span>
+    </div>
+    <p class="t-shimmer loading-state__text" id="loading-message" data-text="Loading skill map...">Loading skill map...</p>
   </div>
 </main>
 
@@ -7300,8 +8152,17 @@ body { display: flex; flex-direction: column; }
 .viewport {
   position: relative; flex: 1; overflow: hidden; background: var(--bg);
 }
-.viewport__canvas { position: absolute; inset: 0; cursor: grab; touch-action: none; }
+.viewport__canvas {
+  position: absolute; inset: 0; cursor: grab; touch-action: none;
+  opacity: 1; transform: scale(1); transform-origin: center; filter: none;
+  transition: opacity 420ms cubic-bezier(0.23, 1, 0.32, 1),
+    transform 420ms cubic-bezier(0.23, 1, 0.32, 1),
+    filter 420ms cubic-bezier(0.23, 1, 0.32, 1);
+}
 .viewport__canvas.panning { cursor: grabbing; }
+body.viewer-loading .viewport__canvas {
+  opacity: 0; transform: scale(0.985); filter: blur(8px);
+}
 .graph-svg { width: 100%; height: 100%; display: block; }
 #graph-zoom { transition: opacity 0.2s; }
 
@@ -7465,8 +8326,120 @@ body { display: flex; flex-direction: column; }
 
 .empty-state, .loading-state {
   position: absolute; inset: 0;
+  z-index: 45;
   display: flex; align-items: center; justify-content: center;
   color: var(--text-dim); font-size: 14px; pointer-events: none;
+}
+.loading-state {
+  flex-direction: column;
+  gap: 18px;
+  background: var(--bg);
+  opacity: 1;
+  transition: opacity 240ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.loading-state[data-closing="true"] {
+  opacity: 0;
+}
+.loading-state__loaders {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+}
+.loading-state__text {
+  position: relative;
+  display: inline-block;
+  margin: 0;
+  color: var(--text-dim);
+}
+.loading-state__text::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 40%,
+    oklch(0.92 0.02 155 / 0.86) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: t-shimmer 1800ms cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.spiral-loader {
+  --spiral-size: 24px;
+  position: relative;
+  display: block;
+  width: var(--spiral-size);
+  height: var(--spiral-size);
+  flex: 0 0 auto;
+  color: oklch(0.934 0.012 91.522);
+}
+.spiral-loader__phase {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  opacity: 0;
+}
+.spiral-loader__phase--fast {
+  animation: spiral-loader-fast-phase 4000ms steps(1, end) infinite;
+}
+.spiral-loader__phase--slow {
+  animation: spiral-loader-slow-phase 4000ms steps(1, end) infinite;
+}
+.spiral-loader__motion {
+  transform: translate(-0.5px, 1.5px);
+}
+.spiral-loader__phase--fast .spiral-loader__motion {
+  animation: spiral-loader-slide 500ms cubic-bezier(0.167, 0.167, 0.833, 0.833) infinite;
+}
+.spiral-loader__phase--slow .spiral-loader__motion {
+  animation: spiral-loader-slide 1000ms cubic-bezier(0.167, 0.167, 0.833, 0.833) infinite;
+}
+.spiral-loader__path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.24;
+  stroke-dasharray: 21 100;
+  stroke-dashoffset: -23;
+}
+.spiral-loader__phase--fast .spiral-loader__path {
+  animation: spiral-loader-trim 500ms cubic-bezier(0.32, 0.154, 0.826, 0.579) infinite;
+}
+.spiral-loader__phase--slow .spiral-loader__path {
+  animation: spiral-loader-trim 1000ms cubic-bezier(0.32, 0.313, 0.826, 0.143) infinite;
+}
+@keyframes t-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
+}
+@keyframes spiral-loader-fast-phase {
+  0%, 49.999% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+@keyframes spiral-loader-slow-phase {
+  0%, 49.999% { opacity: 0; }
+  50%, 100% { opacity: 1; }
+}
+@keyframes spiral-loader-slide {
+  from { transform: translate(-0.5px, 1.5px); }
+  to { transform: translate(-8.5px, 1.5px); }
+}
+@keyframes spiral-loader-trim {
+  from { stroke-dashoffset: -23; }
+  to { stroke-dashoffset: -57; }
 }
 
 @media (max-width: 768px) {
@@ -7484,6 +8457,16 @@ body { display: flex; flex-direction: column; }
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+  .loading-state__text::before,
+  .spiral-loader__phase,
+  .spiral-loader__motion,
+  .spiral-loader__path {
+    animation: none !important;
+  }
+  .spiral-loader__phase--fast { opacity: 1; }
+  .spiral-loader__phase--slow { opacity: 0; }
+  .spiral-loader__motion { transform: translate(-4.5px, 1.5px); }
+  .spiral-loader__path { stroke-dashoffset: -40; }
 }
 """
 
@@ -7527,6 +8510,7 @@ ADMIN_VIEWER_JS = """\
     nodeBaseRadius: 18, nodeSpacingX: 200, nodeSpacingY: 120, domainPaddingY: 40,
   };
 
+  var LOADING_EXIT_MS = 260;
   var sfx = new window.SfxEngine();
   var $ = function (id) { return document.getElementById(id); };
   var dom = {};
@@ -7538,7 +8522,7 @@ ADMIN_VIEWER_JS = """\
      "sound-toggle", "save-curation", "reset-view",
      "legend-toggle",
      "drawer", "drawer-title", "drawer-body", "drawer-close",
-     "empty-state", "loading-state", "curation-stats",
+     "empty-state", "loading-state", "loading-message", "curation-stats",
      "save-toast"
     ].forEach(function (id) {
       dom[id.replace(/-/g, "_")] = $(id);
@@ -7570,13 +8554,39 @@ ADMIN_VIEWER_JS = """\
     renderCurationSummary();
     layoutAndRender();
 
-    document.body.classList.remove("viewer-loading");
-    dom.loading_state.hidden = true;
+    finishLoading();
   }
 
   function showError(msg) {
-    dom.loading_state.textContent = msg;
+    if (dom.loading_state) {
+      delete dom.loading_state.dataset.closing;
+    }
+    setLoadingMessage(msg);
     dom.loading_state.hidden = false;
+  }
+
+  function finishLoading() {
+    document.body.classList.remove("viewer-loading");
+    if (!dom.loading_state) return;
+    dom.loading_state.dataset.closing = "true";
+    var delay = prefersReducedMotion() ? 0 : LOADING_EXIT_MS;
+    window.setTimeout(function () {
+      dom.loading_state.hidden = true;
+      delete dom.loading_state.dataset.closing;
+    }, delay);
+  }
+
+  function prefersReducedMotion() {
+    return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  function setLoadingMessage(msg) {
+    if (!dom.loading_message) {
+      dom.loading_state.textContent = msg;
+      return;
+    }
+    dom.loading_message.textContent = msg;
+    dom.loading_message.dataset.text = msg;
   }
 
   function normalizeCuration(data) {
