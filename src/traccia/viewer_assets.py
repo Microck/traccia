@@ -1952,6 +1952,7 @@ VIEWER_JS = """\
   let domainLabelElements = new Map();
   let svgNodeElements = new Map();
   let svgEdgeElements = [];
+  let renderedSyntheticLabelBoxes = [];
   let canvasSettleTimer = null;
   let resizeFitTimer = null;
   const panelHideTimers = new WeakMap();
@@ -1993,6 +1994,10 @@ VIEWER_JS = """\
     showLevelBadges: true,
     showBackgroundDots: true,
   });
+  // Dormant constellation experiment: keep this off for ordinary skill clicks.
+  // If a future request mentions "constellation", revive this flag or attach
+  // the pocket behavior to a deliberate mode instead of default node selection.
+  const ENABLE_NODE_CONSTELLATION_FOCUS = false;
   let viewSettings = defaultViewSettings();
 
   // View transform
@@ -2006,15 +2011,31 @@ VIEWER_JS = """\
     treeAreaRadius: 430,
     treeTopicRadius: 820,
     treeSkillRadius: 1080,
-    treeSkillRowSpacing: 92,
+    treeSkillRowSpacing: 132,
     treeTopicMinSpan: 0.16,
+    treeSkillLaneMinPx: 118,
+    treeSkillMaxLanes: 24,
+    treeBreathingMax: 2.05,
+    treeAreaBreathingMax: 1.74,
+    treeAreaGapPx: 240,
+    treeTopicGapPx: 280,
+    treeTopicInnerFill: 0.62,
+    treeTopicRadialLaneGap: 92,
+    treeTopicTerritoryLaneGap: 190,
+    treeTopicSkillGap: 560,
+    treeTopicLabelGap: 46,
+    treeTopicLabelLaneGap: 34,
     topicLabelScale: 0.42,
     labelScale: 0.45,
     maxNodeLabels: 1000,
     maxMobileNodeLabels: 180,
     mobileLabelViewportWidth: 700,
-    canvasLabelMinScreenPx: 10,
-    canvasLabelMaxScreenPx: 12,
+    canvasLabelMinGraphPx: 8.4,
+    canvasLabelMaxGraphPx: 10.8,
+    canvasLabelGutterGraphPx: 6,
+    canvasLabelRadialGapGraphPx: 14,
+    canvasLabelSlotStepGraphPx: 13,
+    canvasLabelSlotCount: 7,
     maxAccessibleNodes: 260,
     maxMinimapDots: 1500,
     maxFocusLabels: 52,
@@ -2024,6 +2045,11 @@ VIEWER_JS = """\
     focusContextAlpha: 0.25,
     focusQuietScale: 1,
     focusContextScale: 0.78,
+    focusPocketAncestorGap: 128,
+    focusPocketAncestorTangentGap: 46,
+    focusPocketSiblingRadius: 175,
+    focusPocketSuggestionRadius: 300,
+    focusPocketSpiralStep: 54,
     focusClearanceMaxMove: 118,
     focusClearanceRadii: [34, 56, 82, 112],
     // Canvas edge culling: skip edges whose midpoint is far outside viewport.
@@ -2544,17 +2570,19 @@ VIEWER_JS = """\
     var topicRadius = areaRadius + (370 + Math.min(90, densityExpansion * 4.5)) * separation;
     var skillRadius = topicRadius + (300 + Math.min(150, densityExpansion * 7.5)) * separation;
     var totalWeight = root.children.reduce(function (sum, area) {
-      return sum + area._weight;
+      return sum + area._layoutWeight;
     }, 0) || 1;
-    var cursor = -Math.PI / 2 - Math.PI;
+    var areaGap = angularGapForRadius(VIEW.treeAreaGapPx, skillRadius, root.children.length, Math.PI * 2);
+    var availableAreaSpan = Math.max(Math.PI * 2 * 0.58, Math.PI * 2 - areaGap * root.children.length);
+    var cursor = -Math.PI / 2 - Math.PI + areaGap / 2;
 
     placeTreeNode(root, { x: 0, y: 0, angle: -Math.PI / 2, radius: 0 });
     root.children.forEach(function (area) {
-      var areaSpan = Math.PI * 2 * area._weight / totalWeight;
+      var areaSpan = availableAreaSpan * area._layoutWeight / totalWeight;
       var areaStart = cursor;
       var areaEnd = cursor + areaSpan;
       var areaAngle = (areaStart + areaEnd) / 2;
-      cursor = areaEnd;
+      cursor = areaEnd + areaGap;
       layoutAreaBranch(area, areaStart, areaEnd, areaAngle, areaRadius, topicRadius, skillRadius);
     });
 
@@ -2608,12 +2636,20 @@ VIEWER_JS = """\
       updateBoundsWithNode(groupBounds, areaPoint, area);
       var topics = area.children;
       var topicCount = Math.max(topics.length, 1);
-      var topicSpan = Math.max(VIEW.treeTopicMinSpan * topicCount, (areaEnd - areaStart) * 0.82);
+      var topicSpan = Math.max(VIEW.treeTopicMinSpan * topicCount, (areaEnd - areaStart) * 0.94);
       topicSpan = Math.min(topicSpan, areaEnd - areaStart);
-      var topicStart = areaAngle - topicSpan / 2;
+      var topicGap = angularGapForRadius(VIEW.treeTopicGapPx, skillRadius, topicCount, topicSpan);
+      var topicSlices = weightedTopicSlices(topics, areaAngle, topicSpan, topicGap);
       topics.forEach(function (topic, topicIndex) {
-        var topicAngle = topicStart + topicSpan * (topicIndex + 0.5) / topicCount;
-        var topicR = topicRadius + (topicIndex % 2 ? 28 : -18) * separation;
+        var topicSlice = topicSlices[topicIndex];
+        var topicAngle = topicSlice.angle;
+        topic._labelLane = topicLabelLane(topic, topicIndex, topicCount);
+        topic._territoryLane = topicTerritoryLane(topicIndex, topicCount);
+        var topicR = topicRadius +
+          (topicIndex % 2 ? 28 : -18) * separation +
+          (topic._territoryLane || 0) * VIEW.treeTopicTerritoryLaneGap * separation +
+          (topic._breathing - 1) * 120 * separation +
+          (topic._labelLane || 0) * VIEW.treeTopicRadialLaneGap * separation;
         var topicPoint = {
           x: Math.cos(topicAngle) * topicR,
           y: Math.sin(topicAngle) * topicR * 0.92,
@@ -2623,7 +2659,7 @@ VIEWER_JS = """\
         placeTreeNode(topic, topicPoint);
         updateBoundsWithNode(groupBounds, topicPoint, topic);
         connect(area, topic, area._visualGroup, 2);
-        layoutTopicLeaves(topic, topicAngle, topicSpan / topicCount, skillRadius, groupBounds);
+        layoutTopicLeaves(topic, topicAngle, topicSlice.span, skillRadius, topicR, groupBounds);
       });
 
       var pad = 110 * separation;
@@ -2650,18 +2686,32 @@ VIEWER_JS = """\
       };
     }
 
-    function layoutTopicLeaves(topic, topicAngle, topicSpan, skillRadius, groupBounds) {
+    function layoutTopicLeaves(topic, topicAngle, topicSpan, skillRadius, topicRadius, groupBounds) {
       var skills = topic.children;
       if (!skills.length) return;
-      var leafSpan = Math.max(VIEW.treeTopicMinSpan, topicSpan * 0.82);
-      var laneCapacity = Math.max(4, Math.min(18, Math.floor((leafSpan * skillRadius) / (46 * separation))));
+      var breathing = topic._breathing || 1;
+      var desiredLeafSpan = Math.max(
+        topicSpan * VIEW.treeTopicInnerFill,
+        VIEW.treeTopicMinSpan * Math.min(breathing, 1.35)
+      );
+      var leafSpan = Math.min(topicSpan * 0.82, desiredLeafSpan);
+      var skillR = Math.max(
+        skillRadius + (breathing - 1) * 96 * separation,
+        topicRadius + VIEW.treeTopicSkillGap * separation
+      );
+      var laneMinPx = VIEW.treeSkillLaneMinPx * (1 + (breathing - 1) * 0.46);
+      var laneCapacity = Math.max(
+        4,
+        Math.min(VIEW.treeSkillMaxLanes, Math.floor((leafSpan * skillR) / (laneMinPx * separation)))
+      );
       var laneCount = Math.max(1, Math.min(laneCapacity, skills.length));
+      var rowSpacing = VIEW.treeSkillRowSpacing * (1 + (breathing - 1) * 0.9);
       skills.forEach(function (skill, index) {
         var row = Math.floor(index / laneCount);
         var lane = index % laneCount;
         var angle = topicAngle - leafSpan / 2 + leafSpan * (lane + 0.5) / laneCount;
         angle += seededJitter(skill.id, 11) * Math.min(0.022, leafSpan / Math.max(laneCount, 1) * 0.18);
-        var radius = skillRadius + row * VIEW.treeSkillRowSpacing * separation + (skill.level || 0) * 4 * separation;
+        var radius = skillR + row * rowSpacing * separation + (skill.level || 0) * 4 * separation;
         var point = {
           x: Math.cos(angle) * radius,
           y: Math.sin(angle) * radius * 0.92,
@@ -2719,7 +2769,14 @@ VIEWER_JS = """\
       area._leafCount = area.children.reduce(function (sum, topic) {
         return sum + topic._leafCount;
       }, 0);
-      area._weight = Math.max(3, Math.sqrt(area._leafCount) + area.children.length * 1.35);
+      area.children.forEach(function (topic) {
+        topic._breathing = topicBreathingFactor(topic._leafCount);
+        topic._labelWeight = topicLabelWeight(topic);
+        topic._layoutWeight = topicLayoutWeight(topic);
+      });
+      area._breathing = areaBreathingFactor(area);
+      area._weight = Math.max(3, Math.sqrt(area._leafCount) + area.children.length * 1.95);
+      area._layoutWeight = area._weight * area._breathing;
       var firstTopic = area.children[0];
       if (firstTopic && firstTopic.children[0]) firstTopic.children[0]._isVisualKeystone = true;
       delete area._topics;
@@ -2729,6 +2786,91 @@ VIEWER_JS = """\
       return sum + area._leafCount;
     }, 0);
     return root;
+  }
+
+  function topicBreathingFactor(leafCount) {
+    // Dense topics need actual geometric room, not just fewer labels. This
+    // factor is computed once with the layout so pan/zoom stays a pure camera
+    // transform and the user's mental map does not wobble.
+    var crowding = Math.max(0, Math.sqrt(Math.max(leafCount || 0, 1)) - 3);
+    return Math.min(VIEW.treeBreathingMax, 1 + crowding * 0.2);
+  }
+
+  function topicLabelWeight(topic) {
+    var label = topic && (topic._displayName || topic.name) || "";
+    var extra = Math.max(0, label.length - 14);
+    return 1 + Math.min(0.9, extra * 0.035);
+  }
+
+  function topicLayoutWeight(topic) {
+    return Math.max(1, Math.sqrt(topic._leafCount || 1)) *
+      (topic._breathing || 1) *
+      (topic._labelWeight || 1);
+  }
+
+  function areaBreathingFactor(area) {
+    var topics = area.children || [];
+    if (!topics.length) return 1;
+    var maxTopicBreathing = topics.reduce(function (maxValue, topic) {
+      return Math.max(maxValue, topic._breathing || 1);
+    }, 1);
+    var areaCrowding = Math.max(0, Math.sqrt(Math.max(area._leafCount || 0, 1)) - 8) * 0.046;
+    return Math.min(
+      VIEW.treeAreaBreathingMax,
+      1 + (maxTopicBreathing - 1) * 0.76 + areaCrowding
+    );
+  }
+
+  function topicLabelLane(topic, topicIndex, topicCount) {
+    var label = topic && (topic._displayName || topic.name) || "";
+    var needsLabelRoom = topicCount > 4 || label.length > 18 || (topic._breathing || 1) > 1.16;
+    if (!needsLabelRoom) return 0;
+    var lanes = [0, 1.1, 2.2, 3.25];
+    return lanes[topicIndex % lanes.length];
+  }
+
+  function topicTerritoryLane(topicIndex, topicCount) {
+    if (topicCount <= 1) return 0;
+    var lanes = [0, 2, 4, 1, 3, 5];
+    return lanes[topicIndex % lanes.length];
+  }
+
+  function angularGapForRadius(gapPx, radius, count, totalSpan) {
+    if (count <= 1) return 0;
+    var rawGap = gapPx / Math.max(radius, 1);
+    var maxGap = totalSpan / Math.max(count * 2.6, 1);
+    return Math.max(0, Math.min(rawGap, maxGap));
+  }
+
+  function weightedTopicSlices(topics, centerAngle, totalSpan, gap) {
+    if (!topics.length) return [];
+    var topicGap = gap || 0;
+    var gapTotal = topicGap * Math.max(0, topics.length - 1);
+    var usableSpan = Math.max(totalSpan * 0.42, totalSpan - gapTotal);
+    var minSpan = Math.min(VIEW.treeTopicMinSpan, usableSpan / topics.length * 0.55);
+    var reservedSpan = minSpan * topics.length;
+    if (reservedSpan > usableSpan * 0.92) {
+      minSpan = usableSpan * 0.92 / topics.length;
+      reservedSpan = minSpan * topics.length;
+    }
+    var flexibleSpan = Math.max(0, usableSpan - reservedSpan);
+    var totalWeight = topics.reduce(function (sum, topic) {
+      return sum + (topic._layoutWeight || topicLayoutWeight(topic));
+    }, 0) || topics.length;
+    var coveredSpan = usableSpan + gapTotal;
+    var cursor = centerAngle - coveredSpan / 2;
+    return topics.map(function (topic) {
+      var weight = topic._layoutWeight || topicLayoutWeight(topic);
+      var span = minSpan + flexibleSpan * weight / totalWeight;
+      var slice = {
+        start: cursor,
+        end: cursor + span,
+        angle: cursor + span / 2,
+        span: span,
+      };
+      cursor += span + topicGap;
+      return slice;
+    });
   }
 
   function syntheticTreeNode(id, name, kind, area, topic) {
@@ -3294,13 +3436,121 @@ VIEWER_JS = """\
     state.active = true;
     state.focusIds = new Set(focus.nodeIds || []);
     state.labelIds = new Set(focus.labelIds || []);
+    if (focus.kind === "node" && ENABLE_NODE_CONSTELLATION_FOCUS) {
+      var pocketPoints = buildNodeFocusPocketPoints(focus);
+      pocketPoints.forEach(function (point, id) {
+        state.points.set(id, point);
+      });
+    }
     state.focusIds.forEach(function (id) {
       state.alphas.set(id, 1);
       state.scales.set(id, 1);
       state.hitPriority.set(id, 1.8);
       state.z.set(id, 20);
     });
+    if (focus.kind === "node" && focus.targetId) {
+      state.scales.set(focus.targetId, 1.18);
+      state.hitPriority.set(focus.targetId, 2.4);
+      state.z.set(focus.targetId, 42);
+    }
     return state;
+  }
+
+  function buildNodeFocusPocketPoints(focus) {
+    var points = new Map();
+    if (!focus || !focus.targetId || !layoutCache || !layoutCache.positions) return points;
+    var targetPoint = layoutCache.positions[focus.targetId];
+    if (!targetPoint) return points;
+
+    var focusIds = new Set(focus.nodeIds || []);
+    var basis = focusPocketBasis(targetPoint);
+    points.set(focus.targetId, focusPocketDisplayPoint(targetPoint.x, targetPoint.y));
+
+    var topicId = layoutCache.branchParents[focus.targetId];
+    if (topicId && focusIds.has(topicId)) {
+      points.set(topicId, focusPocketOffsetPoint(
+        targetPoint,
+        basis.inward,
+        basis.tangent,
+        VIEW.focusPocketAncestorGap,
+        -VIEW.focusPocketAncestorTangentGap * 0.35
+      ));
+    }
+
+    var siblingIds = (layoutCache.childrenByParent[topicId] || []).filter(function (id) {
+      return id !== focus.targetId && focusIds.has(id) && nodeById.has(id);
+    });
+    var siblingSet = new Set(siblingIds);
+    var suggestionIds = Array.from(focusIds).filter(function (id) {
+      return id !== focus.targetId &&
+        nodeById.has(id) &&
+        !siblingSet.has(id);
+    });
+
+    placeFocusPocketNodes(
+      points,
+      siblingIds,
+      targetPoint,
+      basis,
+      VIEW.focusPocketSiblingRadius,
+      VIEW.focusPocketSpiralStep,
+      0.35
+    );
+    placeFocusPocketNodes(
+      points,
+      suggestionIds,
+      targetPoint,
+      basis,
+      VIEW.focusPocketSuggestionRadius,
+      VIEW.focusPocketSpiralStep * 1.12,
+      1.55
+    );
+    return points;
+  }
+
+  function focusPocketBasis(point) {
+    var outward = normalizeVector(point.x, point.y);
+    if (Math.abs(outward.x) + Math.abs(outward.y) < 0.001) {
+      outward = { x: 0, y: -1 };
+    }
+    return {
+      outward: outward,
+      inward: { x: -outward.x, y: -outward.y },
+      tangent: { x: -outward.y, y: outward.x },
+    };
+  }
+
+  function focusPocketOffsetPoint(origin, radial, tangent, radialOffset, tangentOffset) {
+    return focusPocketDisplayPoint(
+      origin.x + radial.x * radialOffset + tangent.x * tangentOffset,
+      origin.y + radial.y * radialOffset + tangent.y * tangentOffset
+    );
+  }
+
+  function placeFocusPocketNodes(points, ids, origin, basis, baseRadius, radiusStep, angleOffset) {
+    ids.forEach(function (id, index) {
+      if (points.has(id)) return;
+      var radius = baseRadius + Math.sqrt(index) * radiusStep;
+      var angle = angleOffset + index * 2.399963229728653 + seededJitter(id, 71) * 0.18;
+      var radialOffset = Math.cos(angle) * radius;
+      var tangentOffset = Math.sin(angle) * radius;
+      points.set(id, focusPocketOffsetPoint(origin, basis.outward, basis.tangent, radialOffset, tangentOffset));
+    });
+  }
+
+  function focusPocketDisplayPoint(x, y) {
+    return {
+      x: x,
+      y: y,
+      angle: Math.atan2(y / 0.92, x),
+      radius: Math.hypot(x, y / 0.92),
+    };
+  }
+
+  function normalizeVector(x, y) {
+    var length = Math.hypot(x, y);
+    if (!Number.isFinite(length) || length <= 0.0001) return { x: 0, y: 0 };
+    return { x: x / length, y: y / length };
   }
 
   function buildFocusProtectedBoxes(focus) {
@@ -3424,6 +3674,7 @@ VIEWER_JS = """\
 
     var bounds = getGraphViewportBounds(VIEW.canvasEdgeCullPad + canvasCachePad);
     var canvasNodeIds = getCachedCanvasNodeIds();
+    renderedSyntheticLabelBoxes = [];
 
     // --- Presentation tree scaffold (before skill nodes) ---
     // Keep the surrounding constellation visible during focus. Performance
@@ -3445,6 +3696,7 @@ VIEWER_JS = """\
     if (viewSettings.showLines && selectedNodeId) {
       edges.forEach(function (edge) {
         if (!edgeVisibleOnCanvas(edge, canvasNodeIds)) return;
+        if (!selectedEdgeVisibleInFocusPocket(edge)) return;
 
         var from = getDisplayPoint(edge.fromId);
         var to = getDisplayPoint(edge.toId);
@@ -3611,6 +3863,7 @@ VIEWER_JS = """\
     canvasNodeIds.forEach(function (id) {
       var node = nodeById.get(id);
       if (!node) return;
+      if (!skillLabelVisibleAtCurrentScale(node)) return;
       var p = getDisplayPoint(node.id);
       if (!p) return;
       if (isNodeCollapsed(node)) return;
@@ -3625,43 +3878,155 @@ VIEWER_JS = """\
       Math.max(VIEW.maxFocusLabels, (focusDisplay.labelIds && focusDisplay.labelIds.size) || 0) :
       VIEW.maxNodeLabels;
     var maxLabels = maxRenderedNodeLabels(activeLabelCap);
+    var occupied = canvasReservedLabelBoxes();
     ctx.save();
     candidates.some(function (item, index) {
       if (index >= maxLabels && !labelMustRender(item.node)) return true;
-      drawCanvasSkillLabel(ctx, item.node, item.point);
+      var placement = canvasSkillLabelPlacement(ctx, item.node, item.point, occupied);
+      if (!placement) return false;
+      drawCanvasSkillLabel(ctx, placement);
+      occupied.push(placement.box);
       return false;
     });
     ctx.restore();
   }
 
-  function drawCanvasSkillLabel(ctx, node, point) {
-    var viewScale = safeViewScale();
+  function canvasReservedLabelBoxes() {
+    if (!layoutCache || !viewSettings.showCategories || !viewSettings.showCategoryLabels) return [];
+    return renderedSyntheticLabelBoxes.slice();
+  }
+
+  function canvasSkillLabelPlacement(ctx, node, point, occupied) {
+    var descriptor = canvasSkillLabelDescriptor(ctx, node, point);
+    var candidates = canvasSkillLabelCandidates(node, point, descriptor);
+    for (var i = 0; i < candidates.length; i += 1) {
+      if (!boxIntersectsAny(candidates[i].box, occupied)) {
+        return candidates[i];
+      }
+    }
+    if (labelCanForceRender(node) && candidates.length) {
+      candidates[0].forced = true;
+      return candidates[0];
+    }
+    return null;
+  }
+
+  function canvasSkillLabelDescriptor(ctx, node, point) {
     var r = nodeRadius(node) * getDisplayScale(node.id);
     var displayAlpha = Math.max(0.2, getDisplayAlpha(node.id));
     var isMuted = !labelMustRender(node) && !isKeystoneNode(node);
-    var screenPx = Math.max(
-      VIEW.canvasLabelMinScreenPx,
-      Math.min(VIEW.canvasLabelMaxScreenPx, viewScale < VIEW.labelScale ? 10 : 11)
-    );
-    var fontPx = screenPx / viewScale;
-    var y = point.y + r + (screenPx + 5) / viewScale;
-    ctx.font = "550 " + fontPx + "px " + canvasLabelFontFamily();
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-    ctx.lineJoin = "round";
-    ctx.globalAlpha = displayAlpha * (isMuted ? 0.72 : 0.95);
-    ctx.lineWidth = 3.6 / viewScale;
-    ctx.strokeStyle = "rgba(20, 20, 22, 0.92)";
+    var fontPx = canvasSkillLabelGraphPx(node);
     var text = truncate(displayNameForNode(node), 24);
-    ctx.strokeText(text, point.x, y);
-    ctx.fillStyle = isMuted ? "rgba(184, 179, 166, 0.88)" : "rgba(236, 233, 224, 0.96)";
-    ctx.fillText(text, point.x, y);
+    var font = "550 " + fontPx + "px " + canvasLabelFontFamily();
+    ctx.font = font;
+    var measuredWidth = ctx.measureText(text).width;
+    return {
+      node: node,
+      point: point,
+      text: text,
+      font: font,
+      fontPx: fontPx,
+      width: measuredWidth,
+      height: fontPx * 1.15,
+      radius: r,
+      displayAlpha: displayAlpha,
+      isMuted: isMuted,
+    };
+  }
+
+  function canvasSkillLabelCandidates(node, point, descriptor) {
+    var angle = Number.isFinite(point.angle) ? point.angle : Math.atan2(point.y / 0.92, point.x);
+    var radial = normalizedLabelVector(Math.cos(angle), Math.sin(angle) * 0.92);
+    var tangent = normalizedLabelVector(-radial.y, radial.x);
+    var align = Math.abs(radial.x) > 0.38 ? (radial.x > 0 ? "left" : "right") : "center";
+    var baseDistance = descriptor.radius +
+      VIEW.canvasLabelRadialGapGraphPx + VIEW.canvasLabelGutterGraphPx;
+    var slotStep = VIEW.canvasLabelSlotStepGraphPx;
+    var offsets = [0, -1, 1, -2, 2, -3, 3];
+    var candidates = [];
+    for (var distanceIndex = 0; distanceIndex < 3; distanceIndex += 1) {
+      var distance = baseDistance + distanceIndex * slotStep * 1.35;
+      for (var offsetIndex = 0; offsetIndex < offsets.length; offsetIndex += 1) {
+        if (candidates.length >= VIEW.canvasLabelSlotCount * 3) return candidates;
+        var offset = offsets[offsetIndex] * slotStep;
+        var x = point.x + radial.x * distance + tangent.x * offset;
+        var y = point.y + radial.y * distance + tangent.y * offset;
+        candidates.push(canvasSkillLabelCandidate(descriptor, x, y, align));
+      }
+    }
+    return candidates;
+  }
+
+  function normalizedLabelVector(x, y) {
+    var length = Math.hypot(x, y) || 1;
+    return { x: x / length, y: y / length };
+  }
+
+  function canvasSkillLabelCandidate(descriptor, x, y, align) {
+    var gutter = VIEW.canvasLabelGutterGraphPx;
+    var minX = x - descriptor.width / 2;
+    var maxX = x + descriptor.width / 2;
+    if (align === "left") {
+      minX = x;
+      maxX = x + descriptor.width;
+    } else if (align === "right") {
+      minX = x - descriptor.width;
+      maxX = x;
+    }
+    var halfHeight = descriptor.height / 2;
+    return {
+      node: descriptor.node,
+      text: descriptor.text,
+      font: descriptor.font,
+      fontPx: descriptor.fontPx,
+      x: x,
+      y: y,
+      align: align,
+      displayAlpha: descriptor.displayAlpha,
+      isMuted: descriptor.isMuted,
+      box: {
+        minX: minX - gutter,
+        maxX: maxX + gutter,
+        minY: y - halfHeight - gutter,
+        maxY: y + halfHeight + gutter,
+        cx: x,
+        cy: y,
+      },
+    };
+  }
+
+  function labelCanForceRender(node) {
+    return selectedNodeId === node.id ||
+      !!(filters.search && nodeMatchesSearch(node, filters.search));
+  }
+
+  function drawCanvasSkillLabel(ctx, placement) {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.lineJoin = "round";
+    ctx.font = placement.font;
+    ctx.textAlign = placement.align;
+    ctx.globalAlpha = placement.displayAlpha * (placement.isMuted ? 0.72 : 0.95);
+    ctx.lineWidth = Math.max(1.4, placement.fontPx * 0.24);
+    ctx.strokeStyle = "rgba(20, 20, 22, 0.92)";
+    ctx.strokeText(placement.text, placement.x, placement.y);
+    ctx.fillStyle = placement.isMuted ? "rgba(184, 179, 166, 0.88)" : "rgba(236, 233, 224, 0.96)";
+    ctx.fillText(placement.text, placement.x, placement.y);
     ctx.globalAlpha = 1;
   }
 
   function canvasLabelFontFamily() {
     var family = getComputedStyle(document.documentElement).getPropertyValue("--font-label").trim();
     return family || "Inter, system-ui, sans-serif";
+  }
+
+  function canvasSkillLabelGraphPx(node) {
+    var level = Math.max(0, Math.min(5, node.level || 0));
+    var focusBoost = labelMustRender(node) || isKeystoneNode(node) ? 0.55 : 0;
+    return Math.max(
+      VIEW.canvasLabelMinGraphPx,
+      Math.min(VIEW.canvasLabelMaxGraphPx, 8.6 + level * 0.32 + focusBoost)
+    );
   }
 
   function scheduleCanvasRedraw() {
@@ -3847,7 +4212,7 @@ VIEWER_JS = """\
           applyVisibleCanvasTransform();
         }
       }
-      scheduleSettledCanvasRedraw(focusDisplay && focusDisplay.active ? 1200 : VIEW.cameraPanSettleMs);
+      scheduleSettledCanvasRedraw(VIEW.cameraPanSettleMs);
       return;
     }
     dom.graph_canvas.style.transform = "translate3d(0, 0, 0) scale(1)";
@@ -3903,6 +4268,7 @@ VIEWER_JS = """\
   function renderSyntheticTreeNodes(ctx, bounds) {
     if (!layoutCache) return;
     ctx.save();
+    var labelReservedBoxes = syntheticTreeLabelReservedBoxes(bounds);
     (layoutCache.treeNodes || []).forEach(function (node) {
       if (!node._synthetic) return;
       if (node.kind !== "tree-root" && isDomainCollapsed(node._visualGroup)) {
@@ -3933,11 +4299,19 @@ VIEWER_JS = """\
         ctx.fillStyle = "#ece9e0";
         ctx.globalAlpha = getDisplayAlpha(node.id) * (node.kind === "branch-topic" ? 0.7 : 0.88);
         var labelSize = node.kind === "tree-root" ? 18 : node.kind === "branch-topic" ? 12 : 14;
+        var labelPoint = syntheticTreeLabelPoint(node, p, r);
+        var labelBox = syntheticTreeLabelBox(node, p, r);
+        if (!syntheticTreeLabelCanRender(node, labelBox, labelReservedBoxes)) {
+          ctx.globalAlpha = 1;
+          return;
+        }
         ctx.font = (node.kind === "tree-root" ? "700 " : "650 ") +
           labelSize + "px sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(node._displayName, p.x, p.y + r + (node.kind === "tree-root" ? 22 : 18));
+        ctx.fillText(node._displayName, labelPoint.x, labelPoint.y);
+        labelReservedBoxes.push(labelBox);
+        renderedSyntheticLabelBoxes.push(labelBox);
         ctx.globalAlpha = 1;
       }
     });
@@ -3949,7 +4323,94 @@ VIEWER_JS = """\
     if (node.kind === "tree-root") return true;
     if (node.kind === "skill-area") return false;
     if (node.kind !== "branch-topic") return false;
+    if (!syntheticTreeLabelRelevantInFocus(node)) return false;
     return focusedNodeIds.has(node.id) || safeViewScale() >= VIEW.topicLabelScale;
+  }
+
+  function syntheticTreeLabelRelevantInFocus(node) {
+    if (!activeFocus || !(focusDisplay && focusDisplay.active)) return true;
+    if (activeFocus.kind === "domain" && activeFocus.domain) {
+      return node._visualGroup === activeFocus.domain;
+    }
+    if (activeFocus.kind === "tree") {
+      var targetTreeNode = getSyntheticTreeNode(activeFocus.targetId);
+      if (!targetTreeNode) return false;
+      if (targetTreeNode.kind === "branch-topic") return node.id === targetTreeNode.id;
+      if (targetTreeNode.kind === "skill-area") return node._visualGroup === targetTreeNode._visualGroup;
+      return false;
+    }
+    if (activeFocus.kind === "node") {
+      var targetNode = nodeById.get(activeFocus.targetId);
+      if (!targetNode) return false;
+      return node._visualGroup === targetNode._visualGroup &&
+        node._branchTopic === targetNode._branchTopic;
+    }
+    return false;
+  }
+
+  function syntheticTreeLabelReservedBoxes(bounds) {
+    var boxes = [];
+    if (!layoutCache) return boxes;
+    var state = focusDisplay || emptyFocusDisplay();
+    var ids = new Set();
+    if (state.active) {
+      if (state.focusIds) state.focusIds.forEach(function (id) { ids.add(id); });
+      if (state.labelIds) state.labelIds.forEach(function (id) { ids.add(id); });
+      if (selectedNodeId) ids.add(selectedNodeId);
+    } else if (safeViewScale() >= VIEW.topicLabelScale) {
+      getCachedCanvasNodeIds().forEach(function (id) { ids.add(id); });
+    }
+
+    ids.forEach(function (id) {
+      var node = nodeById.get(id);
+      var point = getDisplayPoint(id);
+      if (!node || !point) return;
+      if (isNodeCollapsed(node)) return;
+      if (bounds && !pointInBounds(point, bounds)) return;
+      if (state.labelIds && state.labelIds.has(id)) {
+        boxes.push(nodeLabelProtectionBox(node, point));
+        return;
+      }
+      boxes.push(nodeClearanceBox(node, point, getDisplayScale(id)));
+    });
+    return boxes;
+  }
+
+  function syntheticTreeLabelCanRender(node, labelBox, reservedBoxes) {
+    if (node.kind === "tree-root") return true;
+    if (!boxIntersectsAny(labelBox, reservedBoxes)) return true;
+    return !!(activeFocus && activeFocus.kind === "tree" && activeFocus.targetId === node.id);
+  }
+
+  function syntheticTreeLabelPoint(node, point, radius) {
+    if (node.kind !== "branch-topic") {
+      return {
+        x: point.x,
+        y: point.y + radius + (node.kind === "tree-root" ? 22 : 18),
+      };
+    }
+    var angle = Number.isFinite(point.angle) ? point.angle : Math.atan2(point.y / 0.92, point.x);
+    var distance = radius +
+      VIEW.treeTopicLabelGap +
+      ((node._labelLane || 0) * VIEW.treeTopicLabelLaneGap);
+    return {
+      x: point.x + Math.cos(angle) * distance,
+      y: point.y + Math.sin(angle) * distance * 0.92,
+    };
+  }
+
+  function syntheticTreeLabelBox(node, point, radius) {
+    var text = node._displayName || node.name || "";
+    var halfWidth = Math.min(180, Math.max(42, text.length * 4.4));
+    var labelPoint = syntheticTreeLabelPoint(node, point, radius);
+    return {
+      minX: labelPoint.x - halfWidth,
+      maxX: labelPoint.x + halfWidth,
+      minY: labelPoint.y - 14,
+      maxY: labelPoint.y + 12,
+      cx: labelPoint.x,
+      cy: labelPoint.y,
+    };
   }
 
   function renderZoomBranchLinks(ctx, bounds, canvasNodeIds) {
@@ -3983,8 +4444,27 @@ VIEWER_JS = """\
   function treeLinkVisible(link, canvasNodeIds) {
     if (!link) return false;
     if (isDomainCollapsed(link.area) && link.depth > 1) return false;
+    if (!treeLinkVisibleInFocusPocket(link)) return false;
     if (link.depth === 3) return canvasNodeIds.has(link.toId);
     return true;
+  }
+
+  function treeLinkVisibleInFocusPocket(link) {
+    var state = focusDisplay || emptyFocusDisplay();
+    if (!(state.active && state.points && state.points.size)) return true;
+    var fromMoved = state.points.has(link.fromId);
+    var toMoved = state.points.has(link.toId);
+    if (fromMoved !== toMoved) return false;
+    if (!fromMoved && !toMoved) return true;
+    return !!(state.focusIds && state.focusIds.has(link.fromId) && state.focusIds.has(link.toId));
+  }
+
+  function selectedEdgeVisibleInFocusPocket(edge) {
+    var state = focusDisplay || emptyFocusDisplay();
+    if (!(state.active && state.points && state.points.size)) return true;
+    return state.points.has(edge.fromId) &&
+      state.points.has(edge.toId) &&
+      !!(state.focusIds && state.focusIds.has(edge.fromId) && state.focusIds.has(edge.toId));
   }
 
   // --- SVG overlay: domain labels ---
@@ -4289,6 +4769,10 @@ VIEWER_JS = """\
     return score;
   }
 
+  function skillLabelVisibleAtCurrentScale(node) {
+    return safeViewScale() >= VIEW.labelScale || labelMustRender(node);
+  }
+
   function isKeystoneNode(node) {
     return !!node._isVisualKeystone;
   }
@@ -4395,13 +4879,11 @@ VIEWER_JS = """\
   function syntheticTreeLabelHit(node, point, gx, gy) {
     if (!shouldRenderSyntheticTreeLabel(node)) return false;
     var r = treeNodeRadius(node);
-    var text = node._displayName || node.name || "";
-    var halfWidth = Math.min(180, Math.max(42, text.length * 4.4));
-    var labelY = point.y + r + 18;
-    return gx >= point.x - halfWidth &&
-      gx <= point.x + halfWidth &&
-      gy >= labelY - 14 &&
-      gy <= labelY + 12;
+    var box = syntheticTreeLabelBox(node, point, r);
+    return gx >= box.minX &&
+      gx <= box.maxX &&
+      gy >= box.minY &&
+      gy <= box.maxY;
   }
 
   // --- Filters ---
@@ -4926,13 +5408,12 @@ VIEWER_JS = """\
     return safeScaleValue(viewState.scale);
   }
 
-  function levelTextScreenPx(screenRadius) {
-    return Math.max(7, Math.min(11, screenRadius * 0.86));
+  function levelTextGraphPx(graphRadius) {
+    return Math.max(3.8, Math.min(7.2, graphRadius * 0.54));
   }
 
   function canvasLevelTextFontSize(graphRadius) {
-    var viewScale = safeViewScale();
-    return levelTextScreenPx(graphRadius * viewScale) / viewScale;
+    return levelTextGraphPx(graphRadius);
   }
 
   function sanitizeViewState() {

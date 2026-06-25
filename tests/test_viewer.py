@@ -693,14 +693,26 @@ def test_viewer_js_renders_canvas_backed_skill_labels(tmp_path: Path) -> None:
     assert "maxNodeLabels: 1000" in js
     assert "maxMobileNodeLabels: 180" in js
     assert "mobileLabelViewportWidth: 700" in js
-    assert "canvasLabelMinScreenPx: 10" in js
-    assert "canvasLabelMaxScreenPx: 12" in js
+    assert "canvasLabelMinGraphPx: 8.4" in js
+    assert "canvasLabelMaxGraphPx: 10.8" in js
+    assert "canvasLabelGutterGraphPx: 6" in js
+    assert "canvasLabelRadialGapGraphPx: 14" in js
+    assert "canvasLabelSlotStepGraphPx: 13" in js
+    assert "canvasLabelSlotCount: 7" in js
     assert "function renderVirtualLabels" not in js
     assert "function renderCanvasSkillLabels" in js
+    assert "function canvasReservedLabelBoxes" in js
+    assert "function canvasSkillLabelPlacement" in js
+    assert "function canvasSkillLabelDescriptor" in js
+    assert "function canvasSkillLabelCandidates" in js
+    assert "function labelCanForceRender" in js
     assert "function drawCanvasSkillLabel" in js
     assert "function canvasLabelFontFamily" in js
+    assert "function canvasSkillLabelGraphPx" in js
+    assert "function skillLabelVisibleAtCurrentScale" in js
     assert "function maxRenderedNodeLabels" in js
     assert "function isConstrainedLabelViewport" in js
+    assert "let renderedSyntheticLabelBoxes = []" in js
     assert "function shouldRenderNodeLabel" not in js
     assert "function labelPriority" not in js
     assert "function getLabelCandidateBounds" not in js
@@ -709,8 +721,8 @@ def test_viewer_js_renders_canvas_backed_skill_labels(tmp_path: Path) -> None:
     assert "labelMustRender" in js
     assert "g.appendChild(labelText)" not in js
     assert "function createNodeLabel" not in js
-    assert "ctx.strokeText(text, point.x, y)" in js
-    assert "ctx.fillText(text, point.x, y)" in js
+    assert "ctx.strokeText(placement.text, placement.x, placement.y)" in js
+    assert "ctx.fillText(placement.text, placement.x, placement.y)" in js
     assert "persistentLabelPriority(node)" in js
 
 
@@ -725,15 +737,46 @@ def test_viewer_js_renders_text_consistently_across_zoom(tmp_path: Path) -> None
     assert "activeLabelCap = focusDisplay && focusDisplay.active" in js
     assert "maxLabels = maxRenderedNodeLabels(activeLabelCap)" in js
     label_body = js.split("function renderCanvasSkillLabels", 1)[1].split(
-        "function drawCanvasSkillLabel", 1
+        "function canvasReservedLabelBoxes", 1
     )[0]
     assert "getLabelCandidateBounds()" not in label_body
+    assert "if (!skillLabelVisibleAtCurrentScale(node)) return" in label_body
     assert "persistentLabelPriority(node)" in label_body
+    assert "var occupied = canvasReservedLabelBoxes()" in label_body
+    assert "var placement = canvasSkillLabelPlacement(ctx, item.node, item.point, occupied)" in label_body
+    assert "occupied.push(placement.box)" in label_body
+    reserved_body = js.split("function canvasReservedLabelBoxes", 1)[1].split(
+        "function canvasSkillLabelPlacement", 1
+    )[0]
+    assert "return renderedSyntheticLabelBoxes.slice()" in reserved_body
     assert "Math.round(activeLabelCap * viewSettings.labelDensity)" in js
     assert "VIEW.maxMobileNodeLabels" in js
     assert "function shouldRenderNodeLabel" not in js
     assert "function labelPriority" not in js
     assert "function getLabelCandidateBounds" not in js
+    label_lod_body = js.split("function skillLabelVisibleAtCurrentScale", 1)[1].split(
+        "function isKeystoneNode", 1
+    )[0]
+    assert "safeViewScale() >= VIEW.labelScale || labelMustRender(node)" in label_lod_body
+
+    descriptor_body = js.split("function canvasSkillLabelDescriptor", 1)[1].split(
+        "function canvasSkillLabelCandidates", 1
+    )[0]
+    assert "var fontPx = canvasSkillLabelGraphPx(node)" in descriptor_body
+    assert "safeViewScale()" not in descriptor_body
+    assert "/ viewScale" not in descriptor_body
+    assert "screenPx" not in descriptor_body
+    candidates_body = js.split("function canvasSkillLabelCandidates", 1)[1].split(
+        "function normalizedLabelVector", 1
+    )[0]
+    assert "VIEW.canvasLabelRadialGapGraphPx + VIEW.canvasLabelGutterGraphPx" in candidates_body
+    assert "VIEW.canvasLabelSlotStepGraphPx" in candidates_body
+    assert "/ viewScale" not in candidates_body
+    draw_label_body = js.split("function drawCanvasSkillLabel", 1)[1].split(
+        "function canvasLabelFontFamily", 1
+    )[0]
+    assert "Math.max(1.4, placement.fontPx * 0.24)" in draw_label_body
+    assert "/ viewScale" not in draw_label_body
 
     render_canvas_body = js.split("function renderCanvas", 1)[1].split(
         "function getCanvasDrawNodes", 1
@@ -746,8 +789,14 @@ def test_viewer_js_renders_text_consistently_across_zoom(tmp_path: Path) -> None
     assert "safeViewScale() < VIEW.detailZoomMedium ? VIEW.canvasEdgeCullPad : 24" not in branch_links_body
     assert '(11 / viewScale) + "px sans-serif"' not in render_canvas_body
     assert "canvasLevelTextFontSize(drawR)" in render_canvas_body
-    assert "function levelTextScreenPx" in js
+    assert "function levelTextGraphPx" in js
+    assert "function levelTextScreenPx" not in js
     assert "function canvasLevelTextFontSize" in js
+    level_font_body = js.split("function canvasLevelTextFontSize", 1)[1].split(
+        "function sanitizeViewState", 1
+    )[0]
+    assert "return levelTextGraphPx(graphRadius)" in level_font_body
+    assert "/ viewScale" not in level_font_body
     assert "function svgLevelTextFontSize" not in js
     assert "function syncSvgLevelTextScale" not in js
     assert "svgLevelElements" not in js
@@ -755,9 +804,19 @@ def test_viewer_js_renders_text_consistently_across_zoom(tmp_path: Path) -> None
     synthetic_body = js.split("function renderSyntheticTreeNodes", 1)[1].split(
         "function shouldRenderSyntheticTreeLabel", 1
     )[0]
+    assert "var labelReservedBoxes = syntheticTreeLabelReservedBoxes(bounds)" in synthetic_body
+    assert "var labelBox = syntheticTreeLabelBox(node, p, r)" in synthetic_body
+    assert "if (!syntheticTreeLabelCanRender(node, labelBox, labelReservedBoxes))" in synthetic_body
+    assert "labelReservedBoxes.push(labelBox)" in synthetic_body
+    assert "renderedSyntheticLabelBoxes.push(labelBox)" in synthetic_body
     assert "/ viewScale) + \"px sans-serif\"" not in synthetic_body
     assert "p.y + r + 18 / viewScale" not in synthetic_body
-    assert 'node.kind === "tree-root" ? 22 : 18' in synthetic_body
+    synthetic_point_body = js.split("function syntheticTreeLabelPoint", 1)[1].split(
+        "function renderZoomBranchLinks", 1
+    )[0]
+    assert 'node.kind === "tree-root" ? 22 : 18' in synthetic_point_body
+    assert "VIEW.treeTopicLabelGap" in synthetic_point_body
+    assert "VIEW.treeTopicLabelLaneGap" in synthetic_point_body
 
     focus_label_body = js.split("function scheduleSettledFocusLabels", 1)[1].split(
         "function setFocusCanvasPreview", 1
@@ -788,6 +847,117 @@ def test_viewer_js_uses_generated_skill_tree_layout_contract(tmp_path: Path) -> 
     assert "function slugifySyntheticId" in js
     assert "originX" in js
     assert "areaNodeId" in js
+
+
+def test_viewer_js_uses_adaptive_topic_breathing_layout_contract(tmp_path: Path) -> None:
+    """Dense branches should get real precomputed spacing, not label-only decluttering."""
+    _write_minimal_graph(tmp_path)
+    export_viewer(tmp_path)
+    js = (tmp_path / "exports" / "viewer" / "assets" / "viewer.js").read_text()
+
+    assert "treeSkillRowSpacing: 132" in js
+    assert "treeSkillLaneMinPx: 118" in js
+    assert "treeSkillMaxLanes: 24" in js
+    assert "treeBreathingMax: 2.05" in js
+    assert "treeAreaBreathingMax: 1.74" in js
+    assert "treeAreaGapPx: 240" in js
+    assert "treeTopicGapPx: 280" in js
+    assert "treeTopicInnerFill: 0.62" in js
+    assert "treeTopicRadialLaneGap: 92" in js
+    assert "treeTopicTerritoryLaneGap: 190" in js
+    assert "treeTopicSkillGap: 560" in js
+    assert "treeTopicLabelGap: 46" in js
+    assert "treeTopicLabelLaneGap: 34" in js
+    assert "function topicBreathingFactor" in js
+    assert "function topicLabelWeight" in js
+    assert "function topicLayoutWeight" in js
+    assert "function areaBreathingFactor" in js
+    assert "function topicLabelLane" in js
+    assert "function topicTerritoryLane" in js
+    assert "function angularGapForRadius" in js
+    assert "function weightedTopicSlices" in js
+    assert "function syntheticTreeLabelPoint" in js
+    assert "function syntheticTreeLabelBox" in js
+    assert "function syntheticTreeLabelRelevantInFocus" in js
+    assert "function syntheticTreeLabelReservedBoxes" in js
+    assert "function syntheticTreeLabelCanRender" in js
+
+    layout_body = js.split("function computeLayout", 1)[1].split(
+        "function buildPresentationTree", 1
+    )[0]
+    assert "area._layoutWeight" in layout_body
+    assert "var areaGap = angularGapForRadius(VIEW.treeAreaGapPx" in layout_body
+    assert "var availableAreaSpan = Math.max(Math.PI * 2 * 0.58" in layout_body
+    assert "cursor = areaEnd + areaGap" in layout_body
+    assert "var topicGap = angularGapForRadius(VIEW.treeTopicGapPx" in layout_body
+    assert "weightedTopicSlices(topics, areaAngle, topicSpan, topicGap)" in layout_body
+    assert "topic._labelLane = topicLabelLane(topic, topicIndex, topicCount)" in layout_body
+    assert "topic._territoryLane = topicTerritoryLane(topicIndex, topicCount)" in layout_body
+    assert "(topic._territoryLane || 0) * VIEW.treeTopicTerritoryLaneGap * separation" in layout_body
+    assert "(topic._breathing - 1) * 120 * separation" in layout_body
+    assert "(topic._labelLane || 0) * VIEW.treeTopicRadialLaneGap * separation" in layout_body
+    assert "var breathing = topic._breathing || 1" in layout_body
+    assert "var desiredLeafSpan = Math.max(" in layout_body
+    assert "topicSpan * VIEW.treeTopicInnerFill" in layout_body
+    assert "var leafSpan = Math.min(topicSpan * 0.82, desiredLeafSpan)" in layout_body
+    assert "skillRadius + (breathing - 1) * 96 * separation" in layout_body
+    assert "topicRadius + VIEW.treeTopicSkillGap * separation" in layout_body
+    assert "var laneMinPx = VIEW.treeSkillLaneMinPx * (1 + (breathing - 1) * 0.46)" in layout_body
+    assert "Math.min(VIEW.treeSkillMaxLanes" in layout_body
+    assert "var rowSpacing = VIEW.treeSkillRowSpacing * (1 + (breathing - 1) * 0.9)" in layout_body
+    assert "requestAnimationFrame" not in layout_body
+    assert "setTimeout" not in layout_body
+
+    tree_body = js.split("function buildPresentationTree", 1)[1].split(
+        "function topicBreathingFactor", 1
+    )[0]
+    assert "topic._breathing = topicBreathingFactor(topic._leafCount)" in tree_body
+    assert "topic._labelWeight = topicLabelWeight(topic)" in tree_body
+    assert "topic._layoutWeight = topicLayoutWeight(topic)" in tree_body
+    assert "area._breathing = areaBreathingFactor(area)" in tree_body
+    assert "area.children.length * 1.95" in tree_body
+    assert "area._layoutWeight = area._weight * area._breathing" in tree_body
+
+    synthetic_body = js.split("function renderSyntheticTreeNodes", 1)[1].split(
+        "function shouldRenderSyntheticTreeLabel", 1
+    )[0]
+    assert "var labelReservedBoxes = syntheticTreeLabelReservedBoxes(bounds)" in synthetic_body
+    assert "var labelPoint = syntheticTreeLabelPoint(node, p, r)" in synthetic_body
+    assert "var labelBox = syntheticTreeLabelBox(node, p, r)" in synthetic_body
+    assert "syntheticTreeLabelCanRender(node, labelBox, labelReservedBoxes)" in synthetic_body
+    assert "ctx.fillText(node._displayName, labelPoint.x, labelPoint.y)" in synthetic_body
+    assert "renderedSyntheticLabelBoxes.push(labelBox)" in synthetic_body
+
+    synthetic_gate_body = js.split("function shouldRenderSyntheticTreeLabel", 1)[1].split(
+        "function syntheticTreeLabelRelevantInFocus", 1
+    )[0]
+    assert "syntheticTreeLabelRelevantInFocus(node)" in synthetic_gate_body
+
+    focus_relevance_body = js.split("function syntheticTreeLabelRelevantInFocus", 1)[1].split(
+        "function syntheticTreeLabelReservedBoxes", 1
+    )[0]
+    assert 'activeFocus.kind === "domain"' in focus_relevance_body
+    assert "node._visualGroup === activeFocus.domain" in focus_relevance_body
+    assert 'targetTreeNode.kind === "branch-topic"' in focus_relevance_body
+    assert 'activeFocus.kind === "node"' in focus_relevance_body
+
+    reserved_body = js.split("function syntheticTreeLabelReservedBoxes", 1)[1].split(
+        "function syntheticTreeLabelCanRender", 1
+    )[0]
+    assert "state.focusIds" in reserved_body
+    assert "state.labelIds" in reserved_body
+    assert "nodeLabelProtectionBox(node, point)" in reserved_body
+    assert "nodeClearanceBox(node, point, getDisplayScale(id))" in reserved_body
+
+    render_canvas_body = js.split("function renderCanvas", 1)[1].split(
+        "function getCanvasDrawNodes", 1
+    )[0]
+    assert "renderedSyntheticLabelBoxes = []" in render_canvas_body
+
+    hit_body = js.split("function syntheticTreeLabelHit", 1)[1].split(
+        "  // --- Filters ---", 1
+    )[0]
+    assert "var box = syntheticTreeLabelBox(node, point, r)" in hit_body
 
 
 # ---------------------------------------------------------------------------
@@ -993,6 +1163,16 @@ def test_viewer_js_has_focus_field_display_contract(tmp_path: Path) -> None:
     assert "function getDisplayZ" in js
     assert "function renderFocusFrame" in js
     assert "function applyFocusDisplayToSvg" in js
+    assert "const ENABLE_NODE_CONSTELLATION_FOCUS = false" in js
+    assert "Dormant constellation experiment" in js
+    assert "focusPocketAncestorGap: 128" in js
+    assert "focusPocketSiblingRadius: 175" in js
+    assert "focusPocketSuggestionRadius: 300" in js
+    assert "function buildNodeFocusPocketPoints" in js
+    assert "function focusPocketBasis" in js
+    assert "function placeFocusPocketNodes" in js
+    assert "function selectedEdgeVisibleInFocusPocket" in js
+    assert "function treeLinkVisibleInFocusPocket" in js
     assert "function clearanceSlotPoint" in js
     assert "function openFocusDock" in js
     assert "function hydrateFocusDockWhenIdle" in js
@@ -1009,11 +1189,47 @@ def test_viewer_js_has_focus_field_display_contract(tmp_path: Path) -> None:
     assert "function drawCanvasSkillLabel" in js
     assert "var r = nodeRadius(node) * getDisplayScale(node.id)" in js
     assert "var displayAlpha = Math.max(0.2, getDisplayAlpha(node.id))" in js
-    assert "fillText(text, point.x, y)" in js
+    assert "drawCanvasSkillLabel(ctx, placement)" in js
+    assert "fillText(placement.text, placement.x, placement.y)" in js
     assert "renderFocusFrame(false)" in js
     assert "var hitPriority = Math.max(0.08, getHitPriority(node.id))" in js
     assert "weightedDist = dist / hitPriority" in js
     assert "function focusStateQuietsId" not in js
+    focus_display_body = js.split("function buildFocusDisplayState", 1)[1].split(
+        "function buildNodeFocusPocketPoints", 1
+    )[0]
+    assert 'focus.kind === "node" && ENABLE_NODE_CONSTELLATION_FOCUS' in focus_display_body
+    assert "var pocketPoints = buildNodeFocusPocketPoints(focus)" in focus_display_body
+    assert "state.points.set(id, point)" in focus_display_body
+    assert "isUnmovedSyntheticContext" not in focus_display_body
+    assert "state.alphas.set(id, 1)" in focus_display_body
+    assert "state.scales.set(focus.targetId, 1.18)" in focus_display_body
+
+    pocket_body = js.split("function buildNodeFocusPocketPoints", 1)[1].split(
+        "function focusPocketBasis", 1
+    )[0]
+    assert "var topicId = layoutCache.branchParents[focus.targetId]" in pocket_body
+    assert "points.set(topicId, focusPocketOffsetPoint(" in pocket_body
+    assert "var areaId" not in pocket_body
+    assert "var rootId" not in pocket_body
+    assert "var siblingIds = (layoutCache.childrenByParent[topicId] || [])" in pocket_body
+    assert "placeFocusPocketNodes(" in pocket_body
+    assert "VIEW.focusPocketSiblingRadius" in pocket_body
+    assert "VIEW.focusPocketSuggestionRadius" in pocket_body
+
+    render_canvas_body = js.split("function renderCanvas", 1)[1].split(
+        "function getCanvasDrawNodes", 1
+    )[0]
+    assert "selectedEdgeVisibleInFocusPocket(edge)" in render_canvas_body
+
+    tree_link_body = js.split("function treeLinkVisible", 1)[1].split(
+        "  // --- SVG overlay: domain labels ---", 1
+    )[0]
+    assert "treeLinkVisibleInFocusPocket(link)" in tree_link_body
+    assert "state.points.has(link.fromId)" in tree_link_body
+    assert "if (fromMoved !== toMoved) return false" in tree_link_body
+    assert "state.points.has(edge.fromId)" in tree_link_body
+    assert "state.points.has(edge.toId)" in tree_link_body
     alpha_body = js.split("function getDisplayAlpha", 1)[1].split("function getDisplayScale", 1)[0]
     scale_body = js.split("function getDisplayScale", 1)[1].split("function getHitPriority", 1)[0]
     z_body = js.split("function getDisplayZ", 1)[1].split("function isFocusQuieted", 1)[0]
@@ -2205,7 +2421,8 @@ def test_viewer_js_uses_retained_canvas_bitmap_cache(tmp_path: Path) -> None:
     assert "blitCanvasBitmapCache()" in active_body
     assert "cameraCacheBlit" not in active_body
     assert "canvasCacheCoversCurrentView()" in active_body
-    assert "focusDisplay && focusDisplay.active ? 1200 : VIEW.cameraPanSettleMs" in apply_body
+    assert "focusDisplay && focusDisplay.active ? 1200 : VIEW.cameraPanSettleMs" not in apply_body
+    assert "scheduleSettledCanvasRedraw(VIEW.cameraPanSettleMs)" in apply_body
     assert "renderCanvas()" in apply_body
     settled_body = js.split("function scheduleSettledCanvasRedraw", 1)[1].split(
         "function resetCanvasBitmapTransform", 1
