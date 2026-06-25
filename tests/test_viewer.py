@@ -452,6 +452,23 @@ def test_export_viewer_omits_font_faces_when_local_fonts_are_missing(
     assert not (assets_dir / "fonts").exists()
 
 
+def test_export_viewer_uses_committed_font_subset_by_default(tmp_path: Path) -> None:
+    _write_minimal_graph(tmp_path)
+    export_viewer(tmp_path)
+
+    fonts_dir = tmp_path / "exports" / "viewer" / "assets" / "fonts"
+    css = (tmp_path / "exports" / "viewer" / "assets" / "viewer.css").read_text()
+    copied_fonts = sorted(font.name for font in fonts_dir.iterdir())
+
+    assert copied_fonts == sorted(
+        target_name for _family, _weight, target_name, _candidates in viewer_module._VIEWER_COMMITTED_FONT_FILES
+    )
+    assert "@font-face" in css
+    assert 'url("fonts/traccia-ui-regular.ttf") format("truetype")' in css
+    assert 'url("fonts/traccia-display-regular.ttf") format("truetype")' in css
+    assert 'url("fonts/traccia-mono-regular.ttf") format("truetype")' in css
+
+
 def test_export_viewer_copies_configured_forma_fonts(
     tmp_path: Path, monkeypatch
 ) -> None:

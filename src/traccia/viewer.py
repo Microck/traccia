@@ -65,9 +65,10 @@ _PUBLIC_EDGE_FIELDS = (
     "weight",
 )
 
-# Local licensed font assets are intentionally not packaged with the source
-# tree. When present in the ignored private folder, exports copy only the
-# weights used by the viewer so public bundles stay small and self-contained.
+# The source tree ships the normalized viewer font subset so clean checkouts
+# export the same typography. The ignored private font folder remains a local
+# override path for foundry/source packages when rebuilding or experimenting.
+_VIEWER_COMMITTED_FONT_SOURCE_DIR = Path(__file__).with_name("assets") / "fonts"
 _VIEWER_DIATYPE_FONT_SOURCE_DIR = (
     Path(__file__).resolve().parents[2] / "private" / "font-assets" / "abc-diatype-fonts"
 )
@@ -316,7 +317,12 @@ _VIEWER_DIATYPE_FONT_FILES = (
         ("Diatype-Semi-Mono/ABCDiatypeSemi-Mono-Bold.ttf",),
     ),
 )
+_VIEWER_COMMITTED_FONT_FILES = tuple(
+    (family, weight, target_name, (target_name,))
+    for family, weight, target_name, _candidates in _VIEWER_MIXED_FONT_FILES
+)
 _VIEWER_FONT_PACKAGES = (
+    ("committed-viewer-subset", _VIEWER_COMMITTED_FONT_SOURCE_DIR, _VIEWER_COMMITTED_FONT_FILES),
     ("mixed-forma-diatype", _VIEWER_FONT_ASSET_ROOT, _VIEWER_MIXED_FONT_FILES),
     ("forma", _VIEWER_FORMA_FONT_SOURCE_DIR, _VIEWER_FORMA_FONT_FILES),
     ("diatype", _VIEWER_DIATYPE_FONT_SOURCE_DIR, _VIEWER_DIATYPE_FONT_FILES),
@@ -391,7 +397,7 @@ def _viewer_font_face_css(
 
 
 def _copy_viewer_font_assets(assets_dir: Path) -> str:
-    """Copy locally licensed viewer font files into a generated viewer bundle."""
+    """Copy the resolved viewer font package into a generated viewer bundle."""
     fonts_dir = assets_dir / "fonts"
     if fonts_dir.exists():
         shutil.rmtree(fonts_dir)

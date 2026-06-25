@@ -27,8 +27,8 @@ tmp/
 !.env.example
 .agent-runtime.json
 
-# Licensed font binaries for local viewer exports. Keep these out of commits;
-# exports copy them into generated tmp/ bundles when present locally.
+# Local foundry/source font packages for viewer experiments. The canonical
+# normalized viewer subset is committed under src/traccia/assets/fonts/.
 private/font-assets/
 docs/design-drafts/
 
