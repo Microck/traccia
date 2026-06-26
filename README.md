@@ -8,6 +8,9 @@
   <img src="https://img.shields.io/badge/license-MIT-000000?style=flat-square" alt="mit license badge">
 </p>
 
+<p align="center">
+<img width="800" height="auto" alt="export-screenshot2293_13-52-26-06-2026_squircle-micr-dev" src="https://github.com/user-attachments/assets/53d79097-98db-428a-8c6d-fe410abf5dff" />
+</p>
 
 ---
 
