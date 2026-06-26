@@ -210,28 +210,30 @@ VIEWER_HTML = """\
 <!-- Main graph viewport -->
 <main class="viewport" id="viewport" role="main" aria-label="Skill graph">
   <div class="viewport__canvas" id="canvas">
-    <!-- Canvas raster layer: renders all node glyphs and bulk edges as pixels.
-         This is the performance layer for 12k+ node graphs. -->
-    <canvas id="graph-canvas" class="graph-canvas" aria-hidden="true"></canvas>
+    <div id="graph-camera" class="graph-camera">
+      <!-- Canvas raster layer: renders all node glyphs and bulk edges as pixels.
+           This is the performance layer for 12k+ node graphs. -->
+      <canvas id="graph-canvas" class="graph-canvas" aria-hidden="true"></canvas>
 
-    <!-- SVG overlay layer: keeps only domain labels, the capped interactive
-         node set, and selection/focus overlays in the DOM.
-         Not aria-hidden: domain labels and the roving priority node set are
-         keyboard focusable with aria-labels, so hiding the SVG would remove
-         useful controls from the accessibility tree. -->
-    <svg id="graph-svg" class="graph-svg" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Skill graph">
-      <defs>
-        <radialGradient id="node-glow" cx="50%" cy="50%" r="50%">
-          <stop offset="0%" stop-color="oklch(0.529 0.07 178.573 / 0.28)"/>
-          <stop offset="100%" stop-color="oklch(0.529 0.07 178.573 / 0)"/>
-        </radialGradient>
-      </defs>
-      <g id="graph-zoom">
-        <g id="graph-domain-labels"></g>
-        <g id="graph-edges"></g>
-        <g id="graph-nodes"></g>
-      </g>
-    </svg>
+      <!-- SVG overlay layer: keeps only domain labels, the capped interactive
+           node set, and selection/focus overlays in the DOM.
+           Not aria-hidden: domain labels and the roving priority node set are
+           keyboard focusable with aria-labels, so hiding the SVG would remove
+           useful controls from the accessibility tree. -->
+      <svg id="graph-svg" class="graph-svg" preserveAspectRatio="xMidYMid meet" role="group" aria-label="Skill graph">
+        <defs>
+          <radialGradient id="node-glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="oklch(0.529 0.07 178.573 / 0.28)"/>
+            <stop offset="100%" stop-color="oklch(0.529 0.07 178.573 / 0)"/>
+          </radialGradient>
+        </defs>
+        <g id="graph-zoom">
+          <g id="graph-domain-labels"></g>
+          <g id="graph-edges"></g>
+          <g id="graph-nodes"></g>
+        </g>
+      </svg>
+    </div>
   </div>
 
   <!-- Collapsible minimap -->
@@ -1043,6 +1045,13 @@ body.viewer-loading .hud-actions {
 
 /* Canvas raster layer: the performance workhorse for 12k+ nodes.
    Sits behind the SVG overlay. */
+.graph-camera {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
 .graph-canvas {
   position: absolute;
   inset: 0;
@@ -1133,6 +1142,19 @@ body.viewer-loading .hud-actions {
   opacity: 0.9;
   stroke: var(--accent-strong) !important;
   stroke-width: 2.4;
+}
+.graph-node-hover-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 90ms var(--motion-ease-out),
+    stroke-width 90ms var(--motion-ease-out);
+}
+.graph-node-hover-ring[data-visible="true"] {
+  opacity: 0.52;
 }
 
 .graph-node__keystone-ring {
@@ -1862,7 +1884,6 @@ body.viewer-loading .hud-actions {
   .search-field__clear:hover { color: var(--text); background: oklch(1 0 0 / 0.045); }
   .hud-btn:hover { color: var(--text); background: transparent; }
   .filterbar__clear:hover { color: var(--text); box-shadow: var(--shadow-border-hover); }
-  .graph-node:hover .graph-node__focus-ring { opacity: 0.42; }
   .domain-label:hover { opacity: 0.94; }
   .legend__close:hover { color: var(--text); background: oklch(1 0 0 / 0.04); }
   .selection-dock__close:hover,
@@ -2331,7 +2352,6 @@ VIEWER_JS = """\
   let canvasDpr = 1;
   let canvasCachePad = 0;
   let canvasViewportPad = 0;
-  let lastActiveCanvasRenderAt = 0;
   let renderedCanvasViewState = { x: 0, y: 0, scale: 1 };
   let blittedCanvasViewState = { x: 0, y: 0, scale: 1 };
   let cachedVisibleNodeIds = null;
@@ -2340,6 +2360,10 @@ VIEWER_JS = """\
   let domainLabelElements = new Map();
   let svgNodeElements = new Map();
   let svgEdgeElements = [];
+  let hoverNodeId = null;
+  let hoverNodeEl = null;
+  let lastCanvasPointer = null;
+  let wheelZoomAnchor = null;
   let renderedSyntheticLabelBoxes = [];
   let canvasSettleTimer = null;
   let resizeFitTimer = null;
@@ -2446,12 +2470,11 @@ VIEWER_JS = """\
     canvasEdgeCullPad: 200,
     canvasCachePadMin: 1800,
     canvasCachePadMax: 2200,
-    canvasViewportPad: 720,
+    canvasViewportPad: 1280,
     canvasMaxDpr: 1.35,
     cameraPanSettleMs: 360,
     cameraZoomLabelSettleMs: 180,
     cameraZoomCanvasSettleMs: 260,
-    cameraActiveRenderMinIntervalMs: 180,
     detailZoomLow: 0.3,
     detailZoomMedium: 0.5,
   };
@@ -2610,7 +2633,7 @@ VIEWER_JS = """\
 
   function cacheDom() {
     [
-      "viewport", "canvas", "graph-canvas", "graph-svg", "graph-zoom", "graph-domain-labels",
+      "viewport", "canvas", "graph-camera", "graph-canvas", "graph-svg", "graph-zoom", "graph-domain-labels",
       "graph-edges", "graph-nodes", "search-toggle", "search-panel",
       "search-input", "search-clear",
       "filter-domain", "filter-status", "filter-freshness", "filter-scope",
@@ -3403,6 +3426,42 @@ VIEWER_JS = """\
     return (VIEW.nodeBaseRadius + Math.max(0, Math.min(level, 5)) * VIEW.nodeLevelStep) * viewSettings.nodeScale;
   }
 
+  function nodeDrawDetailState(node) {
+    var isSelected = selectedNodeId === node.id;
+    var isFocused = focusedNodeIds.has(node.id);
+    var isLandmark = isSelected || isFocused || isKeystoneNode(node) || !!node.featured ||
+      !!(filters.search && nodeMatchesSearch(node, filters.search));
+    var viewScale = safeViewScale();
+    return {
+      isSelected: isSelected,
+      isFocused: isFocused,
+      isLandmark: isLandmark,
+      lowDetail: viewScale < VIEW.detailZoomLow && !isLandmark,
+      mediumDetail: viewScale < VIEW.detailZoomMedium && !isLandmark,
+      viewScale: viewScale,
+    };
+  }
+
+  function nodeVisualRadius(node) {
+    var detail = nodeDrawDetailState(node);
+    var viewScale = detail.viewScale;
+    var drawR = Math.max(
+      0.6 / Math.max(viewScale, 0.025),
+      nodeRadius(node) * getDisplayScale(node.id)
+    );
+    var level = Math.max(0, Math.min(5, node.level || 0));
+    if (detail.lowDetail) {
+      return Math.max(
+        (1.05 + level * 0.24) / viewScale,
+        Math.min(drawR, (2.1 + level * 0.34) / viewScale)
+      );
+    }
+    if (detail.mediumDetail) {
+      return Math.max((2.2 + level * 0.3) / viewScale, drawR * 0.6);
+    }
+    return drawR;
+  }
+
   function nodeColor(node) {
     return nodeColorHex(node);
   }
@@ -3536,12 +3595,12 @@ VIEWER_JS = """\
       return;
     }
 
-    // Commit focus state in one DOM pass. The camera tween and canvas preview
-    // carry the motion; per-frame SVG transform writes are too expensive for
-    // dense exported maps.
+    // Commit focus state to both layers before any camera tween can reuse the
+    // retained canvas bitmap. If SVG hit targets move to the new focus display
+    // while canvas pixels remain at the old positions, hover appears correct
+    // but the visible graph looks offset during zoom/pan.
     focusDisplay = focusDisplayTo;
-    renderFocusFrame(false);
-    scheduleCanvasRedraw();
+    renderFocusFrame(true);
     scheduleSettledFocusLabels();
   }
 
@@ -3697,6 +3756,7 @@ VIEWER_JS = """\
     var scale = getDisplayScale(id);
     el.setAttribute("transform", "translate(" + point.x + "," + point.y + ") scale(" + scale + ")");
     el.style.opacity = String(getDisplayAlpha(id));
+    updateNodeOverlayRadii(el, id);
     el.classList.toggle("selected", selectedNodeId === id);
     el.classList.toggle("focused", focusedNodeIds.has(id));
     el.classList.toggle("quieted", isFocusQuieted(id));
@@ -4151,25 +4211,16 @@ VIEWER_JS = """\
       if (!canvasNodeIds.has(node.id)) return;
       if (isNodeCollapsed(node)) return;
 
-      var r = nodeRadius(node);
       var color = nodeColorHex(node);
-      var isSelected = selectedNodeId === node.id;
-      var isFocused = focusedNodeIds.has(node.id);
-      var isLandmark = isSelected || isFocused || isKeystoneNode(node) || !!node.featured ||
-        !!(filters.search && nodeMatchesSearch(node, filters.search));
-      var viewScale = safeViewScale();
-      var lowDetail = viewScale < VIEW.detailZoomLow && !isLandmark;
-      var mediumDetail = viewScale < VIEW.detailZoomMedium && !isLandmark;
+      var detail = nodeDrawDetailState(node);
+      var isSelected = detail.isSelected;
+      var isFocused = detail.isFocused;
+      var viewScale = detail.viewScale;
+      var lowDetail = detail.lowDetail;
+      var mediumDetail = detail.mediumDetail;
       var stale = isStale(node);
       var displayAlpha = getDisplayAlpha(node.id);
-      var displayScale = getDisplayScale(node.id);
-      var drawR = Math.max(0.6 / Math.max(viewScale, 0.025), r * displayScale);
-      var level = Math.max(0, Math.min(5, node.level || 0));
-      if (lowDetail) {
-        drawR = Math.max((1.05 + level * 0.24) / viewScale, Math.min(drawR, (2.1 + level * 0.34) / viewScale));
-      } else if (mediumDetail) {
-        drawR = Math.max((2.2 + level * 0.3) / viewScale, drawR * 0.6);
-      }
+      var drawR = nodeVisualRadius(node);
 
       // Glow for selected/focused nodes.
       if (isSelected || isFocused) {
@@ -4254,6 +4305,7 @@ VIEWER_JS = """\
     blitCanvasBitmapCache();
     if (dom.graph_canvas) dom.graph_canvas.style.opacity = "";
     resetCanvasBitmapTransform();
+    updateSvgNodeOverlayGeometry();
   }
 
   function getCanvasDrawNodes() {
@@ -4471,6 +4523,33 @@ VIEWER_JS = """\
     dom.graph_canvas.style.transform = "translate3d(0, 0, 0) scale(1)";
   }
 
+  function resetCameraCompositorTransform() {
+    if (!dom.graph_camera) return;
+    dom.graph_camera.style.transform = "translate3d(0, 0, 0) scale(1)";
+  }
+
+  function activeCameraBaseViewState() {
+    return {
+      x: Number.isFinite(blittedCanvasViewState.x) ? blittedCanvasViewState.x : viewState.x,
+      y: Number.isFinite(blittedCanvasViewState.y) ? blittedCanvasViewState.y : viewState.y,
+      scale: safeScaleValue(blittedCanvasViewState.scale || safeViewScale()),
+    };
+  }
+
+  function applyCameraCompositorTransform() {
+    if (!dom.graph_camera) return false;
+    var base = activeCameraBaseViewState();
+    var ratio = safeViewScale() / safeScaleValue(base.scale);
+    if (!Number.isFinite(ratio) || ratio <= 0) {
+      resetCameraCompositorTransform();
+      return false;
+    }
+    var x = viewState.x - base.x * ratio;
+    var y = viewState.y - base.y * ratio;
+    dom.graph_camera.style.transform = "translate3d(" + x + "px, " + y + "px, 0) scale(" + ratio + ")";
+    return true;
+  }
+
   function applyCanvasBitmapFallbackTransform() {
     if (!dom.graph_canvas) return;
     var renderedScale = safeScaleValue(renderedCanvasViewState.scale || safeViewScale());
@@ -4593,6 +4672,19 @@ VIEWER_JS = """\
       source.sy + source.sh <= canvasBitmap.height;
   }
 
+  function canvasRenderedAtCurrentScale() {
+    var renderedScale = safeScaleValue(renderedCanvasViewState.scale || safeViewScale());
+    return Math.abs(renderedScale - safeViewScale()) <= 0.001;
+  }
+
+  function canvasReadyForInteractiveOverlays() {
+    if (canvasRenderedAtCurrentScale()) return true;
+    // During wheel/pan movement, the retained canvas pixels and SVG overlay
+    // share the graph-camera compositor transform. Hover/selection overlays can
+    // stay live without waiting for the expensive settled canvas repaint.
+    return isCameraAnimating() && !!canvasBitmap && !!canvasCtx;
+  }
+
   function applyCanvasBitmapTransform() {
     if (!dom.graph_canvas) return;
     bumpViewerMetric("applyCanvasBitmapTransform");
@@ -4602,35 +4694,39 @@ VIEWER_JS = """\
     }
     if (isCameraAnimating()) {
       if (visibleCanvasTransformWithinPad()) {
-        // During active camera movement, follow input via compositor transforms,
-        // including scale. Reblitting on every wheel frame makes the graph feel
-        // like it is chasing the cursor.
-        bumpViewerMetric("cameraCacheTransform");
-        applyVisibleCanvasTransform();
-      } else if (canvasCacheCoversCurrentView()) {
-        // The visible canvas is close to exposing an edge, but the retained
-        // bitmap still has enough offscreen content. Recenter by copying from
-        // that bitmap instead of doing a full all-node redraw.
-        bumpViewerMetric("cameraCacheActiveBlit");
-        blitCanvasBitmapCache();
+        // During active camera movement, canvas and SVG move together through
+        // #graph-camera. The SVG overlay is pinned to the retained bitmap's base
+        // view, and the shared compositor transform projects both layers to the
+        // live viewState. Pointer math uses viewState directly, so hit testing
+        // does not depend on browser DOMMatrix behavior through CSS transforms.
+        bumpViewerMetric("cameraSharedTransform");
+        resetCanvasBitmapTransform();
       } else {
-        // Extreme moves can outrun the retained bitmap. In that case, a
-        // throttled redraw is less bad than showing checkerboard-like gaps.
-        var now = performance.now();
-        if (now - lastActiveCanvasRenderAt >= VIEW.cameraActiveRenderMinIntervalMs) {
-          lastActiveCanvasRenderAt = now;
-          bumpViewerMetric("cameraCacheActiveRedraw");
-          canvasRedrawPending = false;
-          renderCanvas();
-        } else {
-          bumpViewerMetric("cameraCacheDeferredMiss");
-          applyVisibleCanvasTransform();
-        }
+        // Do not recenter or redraw the bitmap while the camera is active.
+        // Both operations mutate the retained base view; changing that base
+        // mid-wheel/mid-drag makes the visible graph jump a few pixels even
+        // though hover math still uses the correct world coordinates. The
+        // larger visible guard band absorbs normal gestures, and the settled
+        // redraw below refreshes the bitmap from the final camera state.
+        bumpViewerMetric("cameraCacheDeferredMiss");
+        resetCanvasBitmapTransform();
       }
       scheduleSettledCanvasRedraw(VIEW.cameraPanSettleMs);
       return;
     }
+    resetCameraCompositorTransform();
     dom.graph_canvas.style.transform = "translate3d(0, 0, 0) scale(1)";
+    if (!canvasRenderedAtCurrentScale()) {
+      // Reblitting a bitmap rendered at the old zoom keeps node centers in
+      // roughly the right place, but node glyph sizes and LOD-dependent labels
+      // no longer match the SVG hit/hover/selection overlays. A zoom settle is
+      // therefore a hard redraw boundary; pan-only movement can still use the
+      // retained bitmap cache below.
+      bumpViewerMetric("idleScaleMismatchRedraw");
+      canvasRedrawPending = false;
+      renderCanvas();
+      return;
+    }
     if (!canvasCacheCoversCurrentView()) {
       bumpViewerMetric("idleCacheMissRedraw");
       canvasRedrawPending = false;
@@ -4997,25 +5093,24 @@ VIEWER_JS = """\
       // canvas/SVG duplicate glyphs from drifting apart during camera motion.
       var hit = document.createElementNS(ns, "circle");
       hit.setAttribute("class", "graph-node__hit");
-      hit.setAttribute("r", Math.max(r + 10, 20));
       g.appendChild(hit);
 
       // Glow
       var glow = document.createElementNS(ns, "circle");
       glow.setAttribute("class", "graph-node__glow");
-      glow.setAttribute("r", r + 12);
       g.appendChild(glow);
 
       var focusRing = document.createElementNS(ns, "circle");
       focusRing.setAttribute("class", "graph-node__focus-ring");
-      focusRing.setAttribute("r", r + 5);
       g.appendChild(focusRing);
+      updateNodeOverlayRadii(g, node.id);
 
       fragment.appendChild(g);
       svgNodeElements.set(node.id, g);
     });
 
     dom.graph_nodes.replaceChildren(fragment);
+    syncHoverOverlay();
   }
 
   function createDomainLabel(domain, ns) {
@@ -5228,6 +5323,34 @@ VIEWER_JS = """\
     return "M" + from.x + "," + from.y + " L" + to.x + "," + to.y;
   }
 
+  function clientPointToGraphPoint(clientX, clientY) {
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+    if (!dom.canvas) return null;
+    sanitizeViewState();
+    var rect = dom.canvas.getBoundingClientRect();
+    var scale = safeViewScale();
+    return {
+      x: (clientX - rect.left - viewState.x) / scale,
+      y: (clientY - rect.top - viewState.y) / scale,
+    };
+  }
+
+  function graphPointToClientPoint(graphX, graphY) {
+    if (!Number.isFinite(graphX) || !Number.isFinite(graphY)) return null;
+    if (!dom.canvas) return null;
+    sanitizeViewState();
+    var rect = dom.canvas.getBoundingClientRect();
+    var scale = safeViewScale();
+    return {
+      x: rect.left + viewState.x + graphX * scale,
+      y: rect.top + viewState.y + graphY * scale,
+    };
+  }
+
+  function graphScreenScale() {
+    return safeViewScale();
+  }
+
   function truncate(s, n) {
     if (!s) return "";
     return s.length > n ? s.slice(0, n - 3) + "..." : s;
@@ -5239,29 +5362,41 @@ VIEWER_JS = """\
   function hitTestNode(screenX, screenY) {
     if (!layoutCache) return null;
     sanitizeViewState();
-    var rect = dom.canvas.getBoundingClientRect();
-    var viewScale = safeViewScale();
-    var gx = (screenX - rect.left - viewState.x) / viewScale;
-    var gy = (screenY - rect.top - viewState.y) / viewScale;
+    var graphPoint = clientPointToGraphPoint(screenX, screenY);
+    var viewScale = graphScreenScale();
+    if (!graphPoint) {
+      var rect = dom.canvas.getBoundingClientRect();
+      graphPoint = {
+        x: (screenX - rect.left - viewState.x) / safeViewScale(),
+        y: (screenY - rect.top - viewState.y) / safeViewScale(),
+      };
+      viewScale = safeViewScale();
+    }
+    var gx = graphPoint.x;
+    var gy = graphPoint.y;
     var best = null;
     var bestDist = Infinity;
+    var bestPriority = -Infinity;
     var hitRadius = 22 / viewScale + 6;
     var canvasNodeIds = getCachedCanvasNodeIds();
 
     canvasNodeIds.forEach(function (id) {
       var node = nodeById.get(id);
       if (!node) return;
-      var p = layoutCache.positions[node.id];
+      var p = getDisplayPoint(node.id);
       if (!p) return;
       if (isNodeCollapsed(node)) return;
       var dx = p.x - gx;
       var dy = p.y - gy;
       var dist = Math.hypot(dx, dy);
-      var r = nodeRadius(node) * getDisplayScale(node.id);
+      var r = nodeVisualRadius(node);
       var hitPriority = Math.max(0.08, getHitPriority(node.id));
-      var weightedDist = dist / hitPriority;
-      if (dist < r + hitRadius && weightedDist < bestDist) {
-        bestDist = weightedDist;
+      var withinHit = dist < r + hitRadius;
+      var priorityTieBreak = Math.abs(dist - bestDist) <= (0.8 / Math.max(viewScale, 0.05)) &&
+        hitPriority > bestPriority;
+      if (withinHit && (dist < bestDist || priorityTieBreak)) {
+        bestDist = dist;
+        bestPriority = hitPriority;
         best = node.id;
       }
     });
@@ -5271,6 +5406,7 @@ VIEWER_JS = """\
         if (!node || !node._synthetic) return;
         if (node.kind !== "tree-root" && isDomainCollapsed(node._visualGroup)) return;
         var p = layoutCache.positions[node.id];
+        p = getDisplayPoint(node.id) || p;
         if (!p) return;
         var dx = p.x - gx;
         var dy = p.y - gy;
@@ -5280,9 +5416,12 @@ VIEWER_JS = """\
         var insideNode = dist < r + hitRadius;
         if (!insideNode && !labelHit) return;
         var priority = node.kind === "branch-topic" ? 2.2 : node.kind === "skill-area" ? 2 : 1.7;
-        var weightedDist = (labelHit ? 0 : dist) / priority;
-        if (weightedDist < bestDist) {
-          bestDist = weightedDist;
+        var candidateDist = labelHit ? 0 : dist;
+        var priorityTieBreak = Math.abs(candidateDist - bestDist) <= (0.8 / Math.max(viewScale, 0.05)) &&
+          priority > bestPriority;
+        if (candidateDist < bestDist || priorityTieBreak) {
+          bestDist = candidateDist;
+          bestPriority = priority;
           best = node.id;
         }
       });
@@ -5299,6 +5438,96 @@ VIEWER_JS = """\
       gx <= box.maxX &&
       gy >= box.minY &&
       gy <= box.maxY;
+  }
+
+  function activateGraphId(id, fromInteraction) {
+    if (!id) return;
+    if (nodeById.has(id)) {
+      selectNode(id, fromInteraction);
+      return;
+    }
+    focusTreeNode(id, fromInteraction);
+  }
+
+  function pointerActivationId(event, fallbackId) {
+    if (!event || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+      return fallbackId;
+    }
+    return graphNodeIdAtClientPoint(event.clientX, event.clientY) ||
+      hitTestNode(event.clientX, event.clientY) ||
+      fallbackId;
+  }
+
+  function ensureHoverOverlay() {
+    if (hoverNodeEl && hoverNodeEl.isConnected) return hoverNodeEl;
+    var ns = "http://www.w3.org/2000/svg";
+    hoverNodeEl = document.createElementNS(ns, "circle");
+    hoverNodeEl.setAttribute("class", "graph-node-hover-ring");
+    hoverNodeEl.setAttribute("aria-hidden", "true");
+    hoverNodeEl.dataset.visible = "false";
+    dom.graph_nodes.appendChild(hoverNodeEl);
+    return hoverNodeEl;
+  }
+
+  function setHoverNode(id) {
+    if (hoverNodeId === id) return;
+    hoverNodeId = id || null;
+    syncHoverOverlay();
+  }
+
+  function clearHoverNode() {
+    setHoverNode(null);
+  }
+
+  function syncHoverOverlay() {
+    if (!dom.graph_nodes) return;
+    var el = ensureHoverOverlay();
+    if (!hoverNodeId || !canvasReadyForInteractiveOverlays()) {
+      el.dataset.visible = "false";
+      return;
+    }
+    var point = getDisplayPoint(hoverNodeId);
+    var radius = hoverOverlayRadius(hoverNodeId);
+    if (!point || !Number.isFinite(radius)) {
+      el.dataset.visible = "false";
+      return;
+    }
+    el.setAttribute("cx", point.x);
+    el.setAttribute("cy", point.y);
+    el.setAttribute("r", radius);
+    el.dataset.visible = "true";
+  }
+
+  function updateSvgNodeOverlayGeometry() {
+    if (!svgNodeElements || !svgNodeElements.size) {
+      syncHoverOverlay();
+      return;
+    }
+    svgNodeElements.forEach(function (el, id) {
+      updateNodeOverlayRadii(el, id);
+    });
+    syncHoverOverlay();
+  }
+
+  function updateNodeOverlayRadii(el, id) {
+    var node = nodeById.get(id);
+    if (!el || !node) return;
+    var displayScale = Math.max(0.12, getDisplayScale(id));
+    var localVisualR = nodeVisualRadius(node) / displayScale;
+    var hit = el.querySelector(".graph-node__hit");
+    var glow = el.querySelector(".graph-node__glow");
+    var focusRing = el.querySelector(".graph-node__focus-ring");
+    if (hit) hit.setAttribute("r", Math.max(localVisualR + 10, 20));
+    if (glow) glow.setAttribute("r", localVisualR + 12);
+    if (focusRing) focusRing.setAttribute("r", localVisualR + 5);
+  }
+
+  function hoverOverlayRadius(id) {
+    var node = nodeById.get(id);
+    if (node) return nodeVisualRadius(node) + 5;
+    var treeNode = getSyntheticTreeNode(id);
+    if (treeNode) return treeNodeRadius(treeNode) + 6;
+    return NaN;
   }
 
   // --- Filters ---
@@ -6212,6 +6441,7 @@ VIEWER_JS = """\
   function stopCameraAnimation() {
     cameraGestureActive = false;
     wheelCameraActive = false;
+    wheelZoomAnchor = null;
     if (wheelCameraTimer) {
       clearTimeout(wheelCameraTimer);
       wheelCameraTimer = null;
@@ -6230,14 +6460,14 @@ VIEWER_JS = """\
     wheelCameraTimer = setTimeout(function () {
       wheelCameraTimer = null;
       wheelCameraActive = false;
+      wheelZoomAnchor = null;
       scheduleViewUpdate(true, true);
     }, Math.max(80, delay || 0));
   }
 
   function setDirectView(target) {
     setViewImmediate(target);
-    applyCanvasBitmapTransform();
-    applyViewTransform();
+    scheduleViewUpdate(false, false);
   }
 
   function lerp(a, b, t) {
@@ -6254,10 +6484,16 @@ VIEWER_JS = """\
     if (dom.graph_svg) {
       dom.graph_svg.classList.toggle("camera-moving", cameraAnimating);
     }
+    resetSvgBitmapTransform();
     if (cameraAnimating && canvasBitmap && canvasCtx) {
-      applySvgBitmapTransform();
+      // Active movement has one visual camera: #graph-camera. The SVG overlay
+      // stays at the same retained base view as the visible canvas bitmap, so
+      // nodes, labels, lines, hit targets, and hover rings cannot be composited
+      // from different camera states.
+      setGraphZoomTransform(activeCameraBaseViewState());
+      applyCameraCompositorTransform();
     } else {
-      resetSvgBitmapTransform();
+      resetCameraCompositorTransform();
       setGraphZoomTransform(viewState);
     }
     syncDotBackgroundTransform();
@@ -6274,22 +6510,6 @@ VIEWER_JS = """\
   function resetSvgBitmapTransform() {
     if (!dom.graph_svg) return;
     dom.graph_svg.style.transform = "translate3d(0, 0, 0) scale(1)";
-  }
-
-  function applySvgBitmapTransform() {
-    if (!dom.graph_svg) return;
-    var t = visibleCanvasTransform();
-    if (!t.valid) {
-      resetSvgBitmapTransform();
-      setGraphZoomTransform(viewState);
-      return;
-    }
-    // The canvas cache and SVG overlay must move through the same compositor
-    // transform during active camera input. Keeping one as CSS transform and
-    // the other as SVG attribute transform produced a perceptible trailing
-    // "second graph" even when both values updated in the same JS handler.
-    setGraphZoomTransform(blittedCanvasViewState);
-    dom.graph_svg.style.transform = "translate3d(" + t.x + "px, " + t.y + "px, 0) scale(" + t.ratio + ")";
   }
 
   function syncDotBackgroundTransform() {
@@ -7041,9 +7261,11 @@ VIEWER_JS = """\
     dom.canvas.addEventListener("wheel", function (e) {
       e.preventDefault();
       var rect = dom.canvas.getBoundingClientRect();
-      var mx = e.clientX - rect.left;
-      var my = e.clientY - rect.top;
-      zoomAt(mx, my, e);
+      var clientPoint = wheelClientPoint(e);
+      var mx = clientPoint.x - rect.left;
+      var my = clientPoint.y - rect.top;
+      var anchor = zoomAnchorForWheelEvent(clientPoint.x, clientPoint.y, mx, my);
+      zoomAt(anchor.x, anchor.y, e);
     }, { passive: false });
 
     // Touch pan/pinch
@@ -7124,7 +7346,10 @@ VIEWER_JS = """\
     if (event.shiftKey) pixels = pixels / 4;
     var rate = Math.abs(pixels) < 16 || event.ctrlKey ? WHEEL_ZOOM.trackpadRate : WHEEL_ZOOM.mouseRate;
     var scaleFactor = Math.pow(2, -pixels * rate);
-    var base = targetViewState;
+    // Anchor wheel zoom from the camera that is actually visible right now.
+    // targetViewState can be a subpixel-stale intent from a prior tween/settle
+    // path; using it here compounds that tiny error on every wheel tick.
+    var base = cloneViewState(viewState);
     var target = zoomTargetForScale(cx, cy, base.scale * scaleFactor, base);
 
     targetViewState = cloneViewState(target);
@@ -7132,6 +7357,103 @@ VIEWER_JS = """\
     setDirectView(target);
     scheduleZoomLabelRefresh();
     scheduleSettledCanvasRedraw(prefersReducedMotion() ? 0 : VIEW.cameraZoomCanvasSettleMs);
+  }
+
+  function wheelClientPoint(event) {
+    if (!event || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+      return lastCanvasPointer || { x: 0, y: 0 };
+    }
+    if (event.clientX === 0 && event.clientY === 0 && lastCanvasPointer) {
+      return lastCanvasPointer;
+    }
+    return { x: event.clientX, y: event.clientY };
+  }
+
+  function zoomAnchorForWheelEvent(clientX, clientY, fallbackX, fallbackY) {
+    if (wheelCameraActive && wheelZoomAnchor) {
+      return { x: wheelZoomAnchor.screenX, y: wheelZoomAnchor.screenY };
+    }
+    var graphPoint = graphPointForWheelAnchor(clientX, clientY, fallbackX, fallbackY);
+    var screenPoint = screenPointForGraphPoint(graphPoint.graphX, graphPoint.graphY);
+    wheelZoomAnchor = {
+      graphX: graphPoint.graphX,
+      graphY: graphPoint.graphY,
+      nodeId: graphPoint.nodeId,
+      screenX: screenPoint.x,
+      screenY: screenPoint.y,
+    };
+    return screenPoint;
+  }
+
+  function graphPointForWheelAnchor(clientX, clientY, fallbackX, fallbackY) {
+    // Wheel zoom is a camera operation, not a selection operation. Anchoring
+    // to the nearest node center makes the whole map jump whenever the cursor
+    // is near a node but not exactly on its center. The invariant here is the
+    // usual canvas/map rule: the graph coordinate currently under the cursor
+    // must remain under that same cursor for the whole wheel burst.
+    var graphPoint = clientPointToGraphPoint(clientX, clientY);
+    if (graphPoint) {
+      return { graphX: graphPoint.x, graphY: graphPoint.y, nodeId: null };
+    }
+    var scale = safeViewScale();
+    return {
+      graphX: (fallbackX - viewState.x) / scale,
+      graphY: (fallbackY - viewState.y) / scale,
+      nodeId: null,
+    };
+  }
+
+  function screenPointForGraphPoint(graphX, graphY) {
+    if (!wheelCameraActive) {
+      var clientPoint = graphPointToClientPoint(graphX, graphY);
+      if (clientPoint && dom.canvas) {
+        var rect = dom.canvas.getBoundingClientRect();
+        return {
+          x: clientPoint.x - rect.left,
+          y: clientPoint.y - rect.top,
+        };
+      }
+    }
+    // Wheel events can be delivered faster than rAF paints. During a wheel
+    // burst, project from the canonical view state instead of the possibly
+    // stale DOM matrix so repeated deltas keep the same graph point locked.
+    var scale = safeViewScale();
+    return {
+      x: viewState.x + graphX * scale,
+      y: viewState.y + graphY * scale,
+    };
+  }
+
+  function graphNodeIdAtClientPoint(clientX, clientY) {
+    if (!dom.graph_nodes) return null;
+    var elements = document.elementsFromPoint ?
+      document.elementsFromPoint(clientX, clientY) :
+      (document.elementFromPoint ? [document.elementFromPoint(clientX, clientY)] : []);
+    var graphPoint = clientPointToGraphPoint(clientX, clientY);
+    var seen = new Set();
+    var fallbackId = null;
+    var bestId = null;
+    var bestDist = Infinity;
+
+    elements.forEach(function (el) {
+      if (!el || !el.closest) return;
+      var nodeEl = el.closest(".graph-node");
+      if (!nodeEl || !dom.graph_nodes.contains(nodeEl)) return;
+      var id = nodeEl.getAttribute("data-id");
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      if (!fallbackId) fallbackId = id;
+      if (!graphPoint) return;
+      var point = getDisplayPoint(id);
+      if (!point) return;
+      var dist = Math.hypot(point.x - graphPoint.x, point.y - graphPoint.y);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestId = id;
+      }
+    });
+
+    return bestId || fallbackId;
   }
 
   function zoomToScale(cx, cy, scale, base) {
@@ -7722,6 +8044,8 @@ VIEWER_JS = """\
   function bindNodeLayerEvents() {
     dom.graph_nodes.addEventListener("click", handleGraphNodeClick);
     dom.graph_nodes.addEventListener("keydown", handleGraphNodeKeydown);
+    dom.canvas.addEventListener("pointermove", handleGraphPointerMove);
+    dom.canvas.addEventListener("pointerleave", clearHoverNode);
   }
 
   function handleDetailNextClick(e) {
@@ -7752,7 +8076,7 @@ VIEWER_JS = """\
     var nodeId = nodeEl.getAttribute("data-id");
     if (!nodeId) return;
     e.stopPropagation();
-    selectNode(nodeId, true);
+    activateGraphId(pointerActivationId(e, nodeId), true);
   }
 
   function handleGraphNodeKeydown(e) {
@@ -7763,7 +8087,18 @@ VIEWER_JS = """\
     if (!nodeId) return;
     e.preventDefault();
     e.stopPropagation();
-    selectNode(nodeId, true);
+    activateGraphId(nodeId, true);
+  }
+
+  function handleGraphPointerMove(e) {
+    if (e && Number.isFinite(e.clientX) && Number.isFinite(e.clientY)) {
+      lastCanvasPointer = { x: e.clientX, y: e.clientY };
+    }
+    if (!canvasReadyForInteractiveOverlays()) {
+      clearHoverNode();
+      return;
+    }
+    setHoverNode(graphNodeIdAtClientPoint(e.clientX, e.clientY) || hitTestNode(e.clientX, e.clientY));
   }
 
   function navigateArrow(key, fromNodeId) {

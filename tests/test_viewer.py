@@ -1205,15 +1205,63 @@ def test_viewer_js_animates_selection_and_guards_drag_clicks(tmp_path: Path) -> 
     assert "function runWheelZoom" not in js
     assert "function startPanInertia" in js
     assert "function recordPanSample" in js
-    assert "var base = targetViewState" in js
+    assert "var base = cloneViewState(viewState)" in js
+    assert "var base = targetViewState" not in js
     assert "Math.pow(2, -pixels * rate)" in js
+    assert "let lastCanvasPointer = null" in js
+    assert "let wheelZoomAnchor = null" in js
+    assert "function clientPointToGraphPoint" in js
+    assert "function graphPointToClientPoint" in js
+    assert "function graphScreenScale" in js
+    assert "function wheelClientPoint" in js
+    assert "function zoomAnchorForWheelEvent" in js
+    assert "function graphPointForWheelAnchor" in js
+    assert "function screenPointForGraphPoint" in js
+    assert "function graphNodeIdAtClientPoint" in js
+    graph_node_body = js.split("function graphNodeIdAtClientPoint", 1)[1].split(
+        "function zoomToScale", 1
+    )[0]
+    assert "document.elementsFromPoint" in graph_node_body
+    assert "clientPointToGraphPoint(clientX, clientY)" in graph_node_body
+    assert "var bestDist = Infinity" in graph_node_body
+    assert "Math.hypot(point.x - graphPoint.x, point.y - graphPoint.y)" in graph_node_body
+    assert "return bestId || fallbackId" in graph_node_body
+    assert "var clientPoint = wheelClientPoint(e)" in js
+    assert "var anchor = zoomAnchorForWheelEvent(clientPoint.x, clientPoint.y, mx, my)" in js
+    assert "zoomAt(anchor.x, anchor.y, e)" in js
+    wheel_anchor_body = js.split("function zoomAnchorForWheelEvent", 1)[1].split(
+        "function graphPointForWheelAnchor", 1
+    )[0]
+    assert "return { x: wheelZoomAnchor.screenX, y: wheelZoomAnchor.screenY }" in wheel_anchor_body
+    assert "screenX: screenPoint.x" in wheel_anchor_body
+    assert "screenY: screenPoint.y" in wheel_anchor_body
+    graph_anchor_body = js.split("function graphPointForWheelAnchor", 1)[1].split(
+        "function screenPointForGraphPoint", 1
+    )[0]
+    assert "Wheel zoom is a camera operation" in graph_anchor_body
+    assert "clientPointToGraphPoint(clientX, clientY)" in graph_anchor_body
+    assert "graphX: graphPoint.x" in graph_anchor_body
+    assert "hitTestNode(clientX, clientY)" not in graph_anchor_body
+    assert "graphNodeIdAtClientPoint(clientX, clientY)" not in graph_anchor_body
     assert "zoomTargetForScale(cx, cy" in js
     assert "function viewForGraphPointAtScreen" in js
+    client_point_body = js.split("function clientPointToGraphPoint", 1)[1].split(
+        "function graphPointToClientPoint", 1
+    )[0]
+    assert "dom.canvas.getBoundingClientRect()" in client_point_body
+    assert "clientX - rect.left - viewState.x" in client_point_body
+    assert "matrixTransform" not in client_point_body
+    graph_to_client_body = js.split("function graphPointToClientPoint", 1)[1].split(
+        "function graphScreenScale", 1
+    )[0]
+    assert "rect.left + viewState.x + graphX * scale" in graph_to_client_body
+    assert "matrixTransform" not in graph_to_client_body
     assert "startGraphX: (centerX - viewState.x) / safeViewScale()" in js
     assert "viewForGraphPointAtScreen(cx, cy, touchState.startGraphX, touchState.startGraphY, nextScale)" in js
     assert "prefersReducedMotion()" in js
     assert "suppressNextGraphClick = true" in js
-    assert "selectNode(nodeId, true)" in js
+    assert "activateGraphId(pointerActivationId(e, nodeId), true)" in js
+    assert "activateGraphId(nodeId, true)" in js
     assert "selectNode(hitId, true)" in js
     assert "centerOnNode(id, fromInteraction)" in js
     assert "resetView(true)" in js
@@ -1266,9 +1314,16 @@ def test_viewer_js_has_focus_field_display_contract(tmp_path: Path) -> None:
     assert "var displayAlpha = Math.max(0.2, getDisplayAlpha(node.id))" in js
     assert "drawCanvasSkillLabel(ctx, placement)" in js
     assert "fillText(placement.text, placement.x, placement.y)" in js
-    assert "renderFocusFrame(false)" in js
+    assert "renderFocusFrame(true)" in js
+    focus_transition_body = js.split("function startFocusTransition", 1)[1].split(
+        "function resolveFocusDisplay", 1
+    )[0]
+    assert "hover appears correct" in focus_transition_body
+    assert "renderFocusFrame(true)" in focus_transition_body
+    assert "scheduleCanvasRedraw();" not in focus_transition_body
     assert "var hitPriority = Math.max(0.08, getHitPriority(node.id))" in js
-    assert "weightedDist = dist / hitPriority" in js
+    assert "var bestPriority = -Infinity" in js
+    assert "bestDist = dist" in js
     assert "function focusStateQuietsId" not in js
     focus_display_body = js.split("function buildFocusDisplayState", 1)[1].split(
         "function buildNodeFocusPocketPoints", 1
@@ -2347,9 +2402,11 @@ def test_viewer_css_has_canvas_layer_styling(tmp_path: Path) -> None:
     _write_minimal_graph(tmp_path)
     export_viewer(tmp_path)
     css = (tmp_path / "exports" / "viewer" / "assets" / "viewer.css").read_text()
+    assert ".graph-camera" in css
     assert ".graph-canvas" in css
     assert "position: absolute" in css
     assert "inset: 0" in css
+    assert "transform-origin: 0 0" in css
     assert "pointer-events: none" in css
 
 
@@ -2361,9 +2418,30 @@ def test_viewer_svg_nodes_are_interaction_overlay_not_duplicate_glyphs(tmp_path:
     js = (tmp_path / "exports" / "viewer" / "assets" / "viewer.js").read_text()
 
     assert ".graph-node__hit" in css
+    assert ".graph-node-hover-ring" in css
     assert "pointer-events: all" in css
+    assert ".graph-node:hover .graph-node__focus-ring" not in css
     assert 'hit.setAttribute("class", "graph-node__hit")' in js
-    assert "Math.max(r + 10, 20)" in js
+    assert "Math.max(localVisualR + 10, 20)" in js
+    assert "function nodeVisualRadius" in js
+    assert "function updateSvgNodeOverlayGeometry" in js
+    assert "function updateNodeOverlayRadii" in js
+    assert "updateNodeOverlayRadii(g, node.id)" in js
+    assert "updateNodeOverlayRadii(el, id)" in js
+    assert "function pointerActivationId" in js
+    assert "function handleGraphPointerMove" in js
+    pointer_body = js.split("function handleGraphPointerMove", 1)[1].split(
+        "function navigateArrow", 1
+    )[0]
+    assert "graphNodeIdAtClientPoint(e.clientX, e.clientY) || hitTestNode(e.clientX, e.clientY)" in pointer_body
+    activation_body = js.split("function pointerActivationId", 1)[1].split(
+        "function ensureHoverOverlay", 1
+    )[0]
+    assert "graphNodeIdAtClientPoint(event.clientX, event.clientY)" in activation_body
+    assert activation_body.index("graphNodeIdAtClientPoint(event.clientX, event.clientY)") < activation_body.index(
+        "hitTestNode(event.clientX, event.clientY)"
+    )
+    assert 'hoverNodeEl.setAttribute("class", "graph-node-hover-ring")' in js
     assert 'setAttribute("class", "graph-node__circle' not in js
     assert 'setAttribute("class", "graph-node__level")' not in js
     assert 'setAttribute("class", "graph-node__inner")' not in js
@@ -2453,6 +2531,7 @@ def test_viewer_js_uses_retained_canvas_bitmap_cache(tmp_path: Path) -> None:
     """Canvas redraws should complete offscreen before replacing visible pixels."""
     _write_minimal_graph(tmp_path)
     export_viewer(tmp_path)
+    html = (tmp_path / "exports" / "viewer" / "index.html").read_text()
     js = (tmp_path / "exports" / "viewer" / "assets" / "viewer.js").read_text()
 
     assert "let canvasBitmap = null" in js
@@ -2462,14 +2541,16 @@ def test_viewer_js_uses_retained_canvas_bitmap_cache(tmp_path: Path) -> None:
     assert "canvasCachePadMax" in js
     assert "canvasCachePadMin: 1800" in js
     assert "canvasCachePadMax: 2200" in js
-    assert "canvasViewportPad: 720" in js
+    assert "canvasViewportPad: 1280" in js
     assert "canvasMaxDpr: 1.35" in js
     assert "cameraPanSettleMs: 360" in js
     assert "cameraZoomLabelSettleMs: 180" in js
     assert "cameraZoomCanvasSettleMs: 260" in js
-    assert "cameraActiveRenderMinIntervalMs: 180" in js
+    assert "cameraActiveRenderMinIntervalMs" not in js
     assert 'canvasBitmap = document.createElement("canvas")' in js
     assert 'canvasBitmap.getContext("2d")' in js
+    assert '<div id="graph-camera" class="graph-camera">' in html
+    assert '"graph-camera", "graph-canvas", "graph-svg"' in js
     assert "dom.graph_canvas.style.left = (-canvasViewportPad)" in js
     assert 'dom.graph_canvas.style.right = "auto"' in js
     assert 'dom.graph_canvas.style.transformOrigin = canvasViewportPad + "px " + canvasViewportPad + "px"' in js
@@ -2480,9 +2561,21 @@ def test_viewer_js_uses_retained_canvas_bitmap_cache(tmp_path: Path) -> None:
     assert "function visibleCanvasCoversViewport" in js
     assert "function blitCanvasBitmapCache" in js
     assert "function applyCanvasBitmapFallbackTransform" in js
-    assert "function applySvgBitmapTransform" in js
-    assert "setGraphZoomTransform(blittedCanvasViewState)" in js
-    assert "dom.graph_svg.style.transform = \"translate3d(\" + t.x" in js
+    assert "function activeCameraBaseViewState" in js
+    assert "function applyCameraCompositorTransform" in js
+    assert 'dom.graph_camera.style.transform = "translate3d(" + x' in js
+    assert "function resetCameraCompositorTransform" in js
+    assert "function canvasRenderedAtCurrentScale" in js
+    assert "function canvasReadyForInteractiveOverlays" in js
+    overlay_body = js.split("function canvasReadyForInteractiveOverlays", 1)[1].split(
+        "function applyCanvasBitmapTransform", 1
+    )[0]
+    assert "if (canvasRenderedAtCurrentScale()) return true" in overlay_body
+    assert "return isCameraAnimating() && !!canvasBitmap && !!canvasCtx" in overlay_body
+    assert "function applySvgBitmapTransform" not in js
+    assert "setGraphZoomTransform(activeCameraBaseViewState())" in js
+    assert "setGraphZoomTransform(blittedCanvasViewState)" not in js
+    assert "dom.graph_svg.style.transform = \"translate3d(\" + t.x" not in js
     render_body = js.split("function renderCanvas", 1)[1].split("function getCanvasDrawNodes", 1)[0]
     assert "var ctx = canvasBitmapCtx || canvasCtx" in render_body
     assert "viewState.x + canvasCachePad" in render_body
@@ -2495,25 +2588,78 @@ def test_viewer_js_uses_retained_canvas_bitmap_cache(tmp_path: Path) -> None:
         "scheduleSettledCanvasRedraw", 1
     )[0]
     assert "canvasCacheCoversCurrentView()" in apply_body
+    assert "if (!canvasRenderedAtCurrentScale())" in apply_body
+    assert "idleScaleMismatchRedraw" in apply_body
     assert "isCameraAnimating()" in apply_body
     assert "visibleCanvasTransformWithinPad()" in apply_body
     assert "blitCanvasBitmapCache()" in apply_body
-    assert "cameraCacheActiveBlit" in active_body
-    assert "cameraCacheActiveRedraw" in active_body
+    assert "cameraSharedTransform" in active_body
+    assert "cameraCanvasTransform" not in active_body
+    assert "cameraLiveRedraw" not in active_body
+    assert "cameraCacheActiveBlit" not in active_body
+    assert "cameraCacheActiveRedraw" not in active_body
     assert "cameraCacheDeferredMiss" in active_body
-    assert "VIEW.cameraActiveRenderMinIntervalMs" in active_body
-    assert "renderCanvas()" in active_body
-    assert "blitCanvasBitmapCache()" in active_body
+    assert "VIEW.cameraActiveRenderMinIntervalMs" not in active_body
+    assert "renderCanvas()" not in active_body
+    assert "blitCanvasBitmapCache()" not in active_body
     assert "cameraCacheBlit" not in active_body
-    assert "canvasCacheCoversCurrentView()" in active_body
     assert "focusDisplay && focusDisplay.active ? 1200 : VIEW.cameraPanSettleMs" not in apply_body
     assert "scheduleSettledCanvasRedraw(VIEW.cameraPanSettleMs)" in apply_body
     assert "renderCanvas()" in apply_body
+    assert apply_body.index("if (!canvasRenderedAtCurrentScale())") < apply_body.index(
+        "if (!canvasCacheCoversCurrentView())"
+    )
+    direct_body = js.split("function setDirectView", 1)[1].split("function lerp", 1)[0]
+    assert "scheduleViewUpdate(false, false)" in direct_body
+    assert "applyCanvasBitmapTransform()" not in direct_body
+    transform_body = js.split("function applyViewTransform", 1)[1].split(
+        "function setGraphZoomTransform", 1
+    )[0]
+    assert "resetSvgBitmapTransform()" in transform_body
+    assert "setGraphZoomTransform(viewState)" in transform_body
+    assert "setGraphZoomTransform(activeCameraBaseViewState())" in transform_body
+    assert "setGraphZoomTransform(blittedCanvasViewState)" not in transform_body
+    assert "applyCameraCompositorTransform()" in transform_body
+    assert "resetCameraCompositorTransform()" in transform_body
+    assert "#graph-camera" in transform_body
+    assert "applySvgBitmapTransform" not in transform_body
     settled_body = js.split("function scheduleSettledCanvasRedraw", 1)[1].split(
         "function resetCanvasBitmapTransform", 1
     )[0]
     assert "isCameraAnimating()" in settled_body
     assert "scheduleSettledCanvasRedraw(Math.max(80" in settled_body
+    zoom_body = js.split("function zoomAt(cx, cy, event)", 1)[1].split(
+        "function zoomToScale", 1
+    )[0]
+    assert "var base = cloneViewState(viewState)" in zoom_body
+    assert "var base = targetViewState" not in zoom_body
+    client_body = js.split("function wheelClientPoint", 1)[1].split(
+        "function zoomAnchorForWheelEvent", 1
+    )[0]
+    assert "event.clientX === 0 && event.clientY === 0 && lastCanvasPointer" in client_body
+    anchor_body = js.split("function zoomAnchorForWheelEvent", 1)[1].split(
+        "function graphPointForWheelAnchor", 1
+    )[0]
+    assert "wheelCameraActive && wheelZoomAnchor" in anchor_body
+    assert "return { x: wheelZoomAnchor.screenX, y: wheelZoomAnchor.screenY }" in anchor_body
+    assert "screenX: screenPoint.x" in anchor_body
+    assert "screenY: screenPoint.y" in anchor_body
+    graph_anchor_body = js.split("function graphPointForWheelAnchor", 1)[1].split(
+        "function screenPointForGraphPoint", 1
+    )[0]
+    assert "Wheel zoom is a camera operation" in graph_anchor_body
+    assert "clientPointToGraphPoint(clientX, clientY)" in graph_anchor_body
+    assert "graphX: graphPoint.x" in graph_anchor_body
+    assert "hitTestNode(clientX, clientY)" not in graph_anchor_body
+    assert "graphNodeIdAtClientPoint(clientX, clientY)" not in graph_anchor_body
+    assert "graphX: (fallbackX - viewState.x) / scale" in graph_anchor_body
+    screen_body = js.split("function screenPointForGraphPoint", 1)[1].split(
+        "function graphNodeIdAtClientPoint", 1
+    )[0]
+    assert "graphPointToClientPoint(graphX, graphY)" in screen_body
+    assert "if (!wheelCameraActive)" in screen_body
+    assert "viewState.x + graphX * scale" in screen_body
+    assert "viewState.y + graphY * scale" in screen_body
 
 
 def test_viewer_js_only_creates_svg_edges_for_focus_path(tmp_path: Path) -> None:
@@ -2825,10 +2971,21 @@ def test_viewer_js_canvas_click_does_hit_test(tmp_path: Path) -> None:
     js = (tmp_path / "exports" / "viewer" / "assets" / "viewer.js").read_text()
     # The canvas click handler must call hitTestNode
     assert "hitTestNode(" in js
-    # hitTestNode must convert screen coords to graph coords
-    hit_block = js.split("function hitTestNode")[1].split("function ")[0]
-    assert "safeViewScale()" in hit_block
-    assert "viewState.x" in hit_block
+    # hitTestNode must convert screen coords through the canonical view state.
+    # Browser DOMMatrix/getScreenCTM can desync when the active camera uses a
+    # CSS-transformed HTML wrapper around the SVG.
+    hit_block = js.split("function hitTestNode", 1)[1].split("function syntheticTreeLabelHit", 1)[0]
+    assert "clientPointToGraphPoint(screenX, screenY)" in hit_block
+    assert "graphScreenScale()" in hit_block
+    client_point_body = js.split("function clientPointToGraphPoint", 1)[1].split(
+        "function graphPointToClientPoint", 1
+    )[0]
+    assert "clientX - rect.left - viewState.x" in client_point_body
+    assert "matrix.inverse()" not in js
+    assert "nodeVisualRadius(node)" in hit_block
+    assert "var bestPriority = -Infinity" in hit_block
+    assert "bestDist = dist" in hit_block
+    assert "dist / hitPriority" not in hit_block
 
 
 def test_viewer_css_maintains_black_graphite_palette(tmp_path: Path) -> None:

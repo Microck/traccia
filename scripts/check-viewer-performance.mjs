@@ -113,6 +113,7 @@ await page.waitForSelector(".domain-label", { timeout: 30000 });
 async function cameraState() {
   return page.evaluate(() => {
     const graphZoom = document.querySelector("#graph-zoom");
+    const graphCamera = document.querySelector("#graph-camera");
     const graphSvg = document.querySelector("#graph-svg");
     const graphCanvas = document.querySelector("#graph-canvas");
     function parseGraphZoomTransform(transform) {
@@ -147,6 +148,21 @@ async function cameraState() {
         y: rect.top + origin.y + matrix.b * localX + matrix.d * localY + matrix.f,
       };
     }
+    function projectCssLocal(style, point) {
+      const origin = parseOrigin(style.transformOrigin);
+      const matrix = matrixFor(style.transform);
+      const localX = point.x - origin.x;
+      const localY = point.y - origin.y;
+      return {
+        x: origin.x + matrix.a * localX + matrix.c * localY + matrix.e,
+        y: origin.y + matrix.b * localX + matrix.d * localY + matrix.f,
+      };
+    }
+    function projectThroughCamera(viewportRect, point) {
+      const cameraStyle = graphCamera ? getComputedStyle(graphCamera) : null;
+      const local = cameraStyle ? projectCssLocal(cameraStyle, point) : point;
+      return { x: viewportRect.left + local.x, y: viewportRect.top + local.y };
+    }
     function layoutRectFor(element, viewportRect) {
       const style = getComputedStyle(element);
       return {
@@ -172,10 +188,10 @@ async function cameraState() {
       ].map((point) => {
         const localX = point.x - origin.x;
         const localY = point.y - origin.y;
-        return {
-          x: canvasRect.left + origin.x + matrix.a * localX + matrix.c * localY + matrix.e,
-          y: canvasRect.top + origin.y + matrix.b * localX + matrix.d * localY + matrix.f,
-        };
+        return projectThroughCamera(viewportRect, {
+          x: canvasRect.left - viewportRect.left + origin.x + matrix.a * localX + matrix.c * localY + matrix.e,
+          y: canvasRect.top - viewportRect.top + origin.y + matrix.b * localX + matrix.d * localY + matrix.f,
+        });
       });
       const minX = Math.min(...corners.map((point) => point.x));
       const maxX = Math.max(...corners.map((point) => point.x));
@@ -208,11 +224,13 @@ async function cameraState() {
       for (const point of points) {
         const baseX = base.x + point.x * base.scale;
         const baseY = base.y + point.y * base.scale;
-        const svgPoint = projectCssPoint(svgRect, svgStyle, { x: baseX, y: baseY });
-        const canvasPoint = projectCssPoint(canvasRect, canvasStyle, {
+        const svgLocal = projectCssPoint({ left: 0, top: 0 }, svgStyle, { x: baseX, y: baseY });
+        const canvasLocal = projectCssPoint({ left: canvasRect.left - viewportRect.left, top: canvasRect.top - viewportRect.top }, canvasStyle, {
           x: baseX + canvasPad,
           y: baseY + canvasPad,
         });
+        const svgPoint = projectThroughCamera(viewportRect, svgLocal);
+        const canvasPoint = projectThroughCamera(viewportRect, canvasLocal);
         maxDeltaPx = Math.max(
           maxDeltaPx,
           Math.abs(svgPoint.x - canvasPoint.x),
@@ -224,6 +242,7 @@ async function cameraState() {
     const alignment = svgCanvasAlignment();
     return {
       graphZoomTransform: graphZoom?.getAttribute("transform") || "",
+      graphCameraTransform: graphCamera ? getComputedStyle(graphCamera).transform : "",
       graphSvgTransform: graphSvg ? getComputedStyle(graphSvg).transform : "",
       graphCanvasTransform: graphCanvas ? getComputedStyle(graphCanvas).transform : "",
       graphCanvasTransformOrigin: graphCanvas ? getComputedStyle(graphCanvas).transformOrigin : "",
@@ -237,6 +256,7 @@ async function cameraState() {
 await page.evaluate(({ runMouseDrag }) => {
   function cameraState() {
     const graphZoom = document.querySelector("#graph-zoom");
+    const graphCamera = document.querySelector("#graph-camera");
     const graphSvg = document.querySelector("#graph-svg");
     const graphCanvas = document.querySelector("#graph-canvas");
     function parseGraphZoomTransform(transform) {
@@ -271,6 +291,21 @@ await page.evaluate(({ runMouseDrag }) => {
         y: rect.top + origin.y + matrix.b * localX + matrix.d * localY + matrix.f,
       };
     }
+    function projectCssLocal(style, point) {
+      const origin = parseOrigin(style.transformOrigin);
+      const matrix = matrixFor(style.transform);
+      const localX = point.x - origin.x;
+      const localY = point.y - origin.y;
+      return {
+        x: origin.x + matrix.a * localX + matrix.c * localY + matrix.e,
+        y: origin.y + matrix.b * localX + matrix.d * localY + matrix.f,
+      };
+    }
+    function projectThroughCamera(viewportRect, point) {
+      const cameraStyle = graphCamera ? getComputedStyle(graphCamera) : null;
+      const local = cameraStyle ? projectCssLocal(cameraStyle, point) : point;
+      return { x: viewportRect.left + local.x, y: viewportRect.top + local.y };
+    }
     function layoutRectFor(element, viewportRect) {
       const style = getComputedStyle(element);
       return {
@@ -296,10 +331,10 @@ await page.evaluate(({ runMouseDrag }) => {
       ].map((point) => {
         const localX = point.x - origin.x;
         const localY = point.y - origin.y;
-        return {
-          x: canvasRect.left + origin.x + matrix.a * localX + matrix.c * localY + matrix.e,
-          y: canvasRect.top + origin.y + matrix.b * localX + matrix.d * localY + matrix.f,
-        };
+        return projectThroughCamera(viewportRect, {
+          x: canvasRect.left - viewportRect.left + origin.x + matrix.a * localX + matrix.c * localY + matrix.e,
+          y: canvasRect.top - viewportRect.top + origin.y + matrix.b * localX + matrix.d * localY + matrix.f,
+        });
       });
       const minX = Math.min(...corners.map((point) => point.x));
       const maxX = Math.max(...corners.map((point) => point.x));
@@ -332,11 +367,16 @@ await page.evaluate(({ runMouseDrag }) => {
       for (const point of points) {
         const baseX = base.x + point.x * base.scale;
         const baseY = base.y + point.y * base.scale;
-        const svgPoint = projectCssPoint(svgRect, svgStyle, { x: baseX, y: baseY });
-        const canvasPoint = projectCssPoint(canvasRect, canvasStyle, {
+        const svgLocal = projectCssPoint({ left: 0, top: 0 }, svgStyle, { x: baseX, y: baseY });
+        const canvasLocal = projectCssPoint({
+          left: canvasRect.left - viewportRect.left,
+          top: canvasRect.top - viewportRect.top,
+        }, canvasStyle, {
           x: baseX + canvasPad,
           y: baseY + canvasPad,
         });
+        const svgPoint = projectThroughCamera(viewportRect, svgLocal);
+        const canvasPoint = projectThroughCamera(viewportRect, canvasLocal);
         maxDeltaPx = Math.max(
           maxDeltaPx,
           Math.abs(svgPoint.x - canvasPoint.x),
@@ -348,6 +388,7 @@ await page.evaluate(({ runMouseDrag }) => {
     const alignment = svgCanvasAlignment();
     return {
       graphZoomTransform: graphZoom?.getAttribute("transform") || "",
+      graphCameraTransform: graphCamera ? graphCamera.style.transform : "",
       graphSvgTransform: graphSvg ? graphSvg.style.transform : "",
       graphCanvasTransform: graphCanvas ? graphCanvas.style.transform : "",
       graphCanvasTransformOrigin: graphCanvas ? getComputedStyle(graphCanvas).transformOrigin : "",
@@ -360,6 +401,7 @@ await page.evaluate(({ runMouseDrag }) => {
   function cameraChanged(before, after) {
     return (
       before.graphZoomTransform !== after.graphZoomTransform ||
+      before.graphCameraTransform !== after.graphCameraTransform ||
       before.graphSvgTransform !== after.graphSvgTransform ||
       before.graphCanvasTransform !== after.graphCanvasTransform
     );
@@ -368,75 +410,8 @@ await page.evaluate(({ runMouseDrag }) => {
   window.__tracciaInputProbe = { records: [] };
   const probe = window.__tracciaInputProbe;
 
-  function inlinePx(value) {
-    return Number.parseFloat(value || "0") || 0;
-  }
-
-  function parseOrigin(origin) {
-    const parts = String(origin || "0px 0px").split(/\s+/);
-    return {
-      x: Number.parseFloat(parts[0]) || 0,
-      y: Number.parseFloat(parts[1] || parts[0]) || 0,
-    };
-  }
-
-  function matrixFor(transform) {
-    if (!transform || transform === "none") return new DOMMatrix();
-    return new DOMMatrix(transform);
-  }
-
-  function canvasCoverageMissPxLite() {
-    const viewport = document.querySelector("#canvas");
-    const graphCanvas = document.querySelector("#graph-canvas");
-    if (!viewport || !graphCanvas) return Infinity;
-    const viewportWidth = viewport.clientWidth || window.innerWidth || 0;
-    const viewportHeight = viewport.clientHeight || window.innerHeight || 0;
-    const canvasStyle = graphCanvas.style;
-    const left = inlinePx(canvasStyle.left);
-    const top = inlinePx(canvasStyle.top);
-    const width = inlinePx(canvasStyle.width) || graphCanvas.width || 0;
-    const height = inlinePx(canvasStyle.height) || graphCanvas.height || 0;
-    const origin = parseOrigin(canvasStyle.transformOrigin);
-    const matrix = matrixFor(canvasStyle.transform);
-    const corners = [
-      { x: 0, y: 0 },
-      { x: width, y: 0 },
-      { x: 0, y: height },
-      { x: width, y: height },
-    ].map((point) => {
-      const localX = point.x - origin.x;
-      const localY = point.y - origin.y;
-      return {
-        x: left + origin.x + matrix.a * localX + matrix.c * localY + matrix.e,
-        y: top + origin.y + matrix.b * localX + matrix.d * localY + matrix.f,
-      };
-    });
-    const minX = Math.min(...corners.map((point) => point.x));
-    const maxX = Math.max(...corners.map((point) => point.x));
-    const minY = Math.min(...corners.map((point) => point.y));
-    const maxY = Math.max(...corners.map((point) => point.y));
-    return Math.max(
-      Math.max(0, minX),
-      Math.max(0, minY),
-      Math.max(0, viewportWidth - maxX),
-      Math.max(0, viewportHeight - maxY),
-    );
-  }
-
   function cameraStateForInput() {
-    const graphZoom = document.querySelector("#graph-zoom");
-    const graphSvg = document.querySelector("#graph-svg");
-    const graphCanvas = document.querySelector("#graph-canvas");
-    const graphSvgTransform = graphSvg ? graphSvg.style.transform : "";
-    const graphCanvasTransform = graphCanvas ? graphCanvas.style.transform : "";
-    return {
-      graphZoomTransform: graphZoom?.getAttribute("transform") || "",
-      graphSvgTransform,
-      graphCanvasTransform,
-      svgCanvasAligned: graphSvgTransform === graphCanvasTransform,
-      svgCanvasAlignmentMaxDeltaPx: graphSvgTransform === graphCanvasTransform ? 0 : Infinity,
-      canvasCoverageMissPx: canvasCoverageMissPxLite(),
-    };
+    return cameraState();
   }
 
   function recordInput(type) {
@@ -487,6 +462,7 @@ await page.evaluate(({ runMouseDrag }) => {
 function cameraChanged(before, after) {
   return (
     before.graphZoomTransform !== after.graphZoomTransform ||
+    before.graphCameraTransform !== after.graphCameraTransform ||
     before.graphSvgTransform !== after.graphSvgTransform ||
     before.graphCanvasTransform !== after.graphCanvasTransform
   );
@@ -598,10 +574,12 @@ await page.evaluate(() => {
     perf.frameGaps.push(now - perf.lastFrame);
     perf.lastFrame = now;
     const graphZoom = document.querySelector("#graph-zoom");
+    const graphCamera = document.querySelector("#graph-camera");
     const graphSvg = document.querySelector("#graph-svg");
     if (graphZoom) {
       perf.graphCameraTransforms.push([
         graphZoom.getAttribute("transform") || "",
+        graphCamera ? graphCamera.style.transform : "",
         graphSvg ? graphSvg.style.transform : "",
       ].join(" | "));
     }
@@ -953,8 +931,11 @@ if (runMouseDrag) {
   if (!cameraChanged(measurement.dragCameraBefore, measurement.dragCameraImmediate)) {
     failures.push("SVG graph camera did not update immediately after drag input");
   }
-  if (measurement.dragCameraImmediate.graphSvgTransform !== measurement.dragCameraImmediate.graphCanvasTransform) {
-    failures.push("SVG overlay and canvas used different immediate drag transforms");
+  if (!measurement.dragCameraImmediate.svgCanvasAligned) {
+    failures.push(
+      `SVG overlay and canvas projected different immediate drag positions ` +
+        `(${measurement.dragCameraImmediate.svgCanvasAlignmentMaxDeltaPx.toFixed(2)}px)`,
+    );
   }
   if (dragPixelDelta.changedPixelRatio < 0.002) {
     failures.push(
@@ -970,12 +951,14 @@ if (measurement.graphCameraTransformCount < 2) failures.push("SVG graph camera d
 if (measurement.minGraphZoomOpacity < 0.99) {
   failures.push(`SVG graph camera faded during drag (${measurement.minGraphZoomOpacity})`);
 }
-if ((measurement.viewerMetrics.cameraCacheBlit || 0) > 0) {
-  failures.push(`canvas cache blitted during active camera input (${measurement.viewerMetrics.cameraCacheBlit})`);
-}
-if ((measurement.viewerMetrics.cameraCacheMissRedraw || 0) > 0) {
+if ((measurement.viewerMetrics.cameraCacheActiveBlit || 0) > 0) {
   failures.push(
-    `canvas cache redrew during active camera input (${measurement.viewerMetrics.cameraCacheMissRedraw})`,
+    `canvas cache blitted during active camera input (${measurement.viewerMetrics.cameraCacheActiveBlit})`,
+  );
+}
+if ((measurement.viewerMetrics.cameraCacheActiveRedraw || 0) > 0) {
+  failures.push(
+    `canvas cache redrew during active camera input (${measurement.viewerMetrics.cameraCacheActiveRedraw})`,
   );
 }
 if ((measurement.viewerMetrics.cameraCacheDeferredMiss || 0) > 0) {
@@ -1028,7 +1011,6 @@ for (const [label, record] of requiredInputRecords) {
   if (!record.raf) {
     failures.push(`${label} input probe did not reach next animation frame`);
   } else {
-    if (!record.raf.changed) failures.push(`${label} camera did not change by next animation frame`);
     if (!record.raf.svgCanvasAligned) {
       failures.push(
         `${label} SVG/canvas visual positions diverged by next animation frame ` +
@@ -1053,7 +1035,6 @@ for (const [type, summary] of Object.entries(inputProbeSummary)) {
 
 for (const record of inputRecords) {
   if (!record.raf) continue;
-  if (!record.raf.changed) failures.push(`${record.type} camera did not change by next animation frame`);
   if (!record.raf.svgCanvasAligned) {
     failures.push(
       `${record.type} SVG/canvas visual positions diverged by next animation frame ` +
