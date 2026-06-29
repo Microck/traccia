@@ -457,12 +457,29 @@ def export_viewer(project_root: Path, *, enable_sound: bool = True) -> Path:
     export_root.mkdir(parents=True, exist_ok=True)
 
     (export_root / "graph.json").write_text(json.dumps(public_graph, indent=2) + "\n")
-    (export_root / "config.json").write_text(
-        json.dumps({"enableSound": enable_sound, "version": 1}, indent=2) + "\n"
-    )
+    viewer_config = {"enableSound": enable_sound, "version": 1}
+    viewer_config.update(_load_viewer_tutorial_config(project_root))
+    (export_root / "config.json").write_text(json.dumps(viewer_config, indent=2) + "\n")
 
     write_viewer_assets(export_root)
     return export_root
+
+
+def _load_viewer_tutorial_config(project_root: Path) -> dict[str, object]:
+    """Load optional site-specific tutorial config.
+
+    The packaged viewer must not ship personal onboarding copy for every
+    Traccia user. A project can opt in by placing public-safe tutorial settings
+    in ``config/viewer-tutorial.json``; those settings are copied into the
+    exported ``config.json`` and consumed by the static viewer.
+    """
+    path = project_root / "config" / "viewer-tutorial.json"
+    if not path.exists():
+        return {}
+    payload = json.loads(path.read_text())
+    if not isinstance(payload, dict):
+        raise ValueError(f"Viewer tutorial config must be a JSON object: {path}")
+    return payload
 
 
 def build_public_graph(raw_graph: dict[str, object]) -> dict[str, object]:
@@ -887,13 +904,9 @@ def publish_public_bundle(
     export_root.mkdir(parents=True, exist_ok=True)
 
     (export_root / "graph.json").write_text(json.dumps(public_graph, indent=2) + "\n")
-    (export_root / "config.json").write_text(
-        json.dumps(
-            {"enableSound": enable_sound, "version": 1, "mode": "public"},
-            indent=2,
-        )
-        + "\n"
-    )
+    viewer_config = {"enableSound": enable_sound, "version": 1, "mode": "public"}
+    viewer_config.update(_load_viewer_tutorial_config(project_root))
+    (export_root / "config.json").write_text(json.dumps(viewer_config, indent=2) + "\n")
 
     # Write the admin-only alias map next to the public bundle. This file
     # maps internal IDs to public aliases for sensitive IDs. It is NOT part

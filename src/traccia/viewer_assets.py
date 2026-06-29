@@ -16,8 +16,8 @@ VIEWER_HTML = """\
 <meta name="color-scheme" content="dark light">
 <title>Skill Map</title>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-<link rel="stylesheet" href="assets/viewer.css?v=20260629-anchor-lock-1">
-<link rel="preload" href="graph.json?v=20260629-anchor-lock-1" as="fetch" crossorigin>
+<link rel="stylesheet" href="assets/viewer.css?v=20260629-tutorial-1">
+<link rel="preload" href="graph.json?v=20260629-tutorial-1" as="fetch" crossorigin>
 </head>
 <body class="viewer-loading">
 
@@ -305,6 +305,25 @@ VIEWER_HTML = """\
   </div>
 </main>
 
+<!-- First-run tutorial: separate from the legend so the legend remains a reference panel. -->
+<div class="tutorial" id="tutorial" role="dialog" aria-modal="true" aria-labelledby="tutorial-title" data-open="false" hidden>
+  <div class="tutorial__scrim" id="tutorial-scrim" aria-hidden="true"></div>
+  <div class="tutorial__mask tutorial__mask--top" aria-hidden="true"></div>
+  <div class="tutorial__mask tutorial__mask--right" aria-hidden="true"></div>
+  <div class="tutorial__mask tutorial__mask--bottom" aria-hidden="true"></div>
+  <div class="tutorial__mask tutorial__mask--left" aria-hidden="true"></div>
+  <div class="tutorial__spotlight" id="tutorial-spotlight" aria-hidden="true"></div>
+  <section class="tutorial__card" id="tutorial-card" aria-describedby="tutorial-body">
+    <p class="tutorial__progress" id="tutorial-progress">1 / 1</p>
+    <h2 class="tutorial__title" id="tutorial-title">Welcome</h2>
+    <div class="tutorial__body" id="tutorial-body"></div>
+    <div class="tutorial__actions">
+      <button class="tutorial__skip" id="tutorial-skip" type="button">Skip</button>
+      <button class="tutorial__next" id="tutorial-next" type="button">Next</button>
+    </div>
+  </section>
+</div>
+
 <!-- Desktop selection dock: stable node inspector, not a full-height drawer -->
 <aside class="selection-dock t-panel-slide" id="drawer" role="complementary" aria-label="Selected node details" aria-hidden="true" data-open="false" hidden>
   <div class="selection-dock__header">
@@ -324,8 +343,8 @@ VIEWER_HTML = """\
   <div class="sheet__body" id="sheet-body"></div>
 </aside>
 
-<script src="assets/sfx.js?v=20260629-anchor-lock-1" defer></script>
-<script src="assets/viewer.js?v=20260629-anchor-lock-1" defer></script>
+<script src="assets/sfx.js?v=20260629-tutorial-1" defer></script>
+<script src="assets/viewer.js?v=20260629-tutorial-1" defer></script>
 </body>
 </html>
 """
@@ -1033,6 +1052,10 @@ body.viewer-loading .viewport__canvas {
   opacity: 0;
   filter: blur(8px);
 }
+body.viewer-intro .viewport__canvas {
+  pointer-events: none;
+  cursor: default;
+}
 body.viewer-loading .hud-actions {
   opacity: 0;
   transform: translateX(-50%) translateY(14px) scale(0.97);
@@ -1376,6 +1399,150 @@ body.viewer-loading .hud-actions {
 .eline--solid { border-top-style: solid; border-color: var(--text-muted); }
 .eline--dashed { border-top-style: dashed; border-color: var(--text-muted); }
 .eline--dotted { border-top-style: dotted; border-color: var(--text-muted); }
+
+/* ===================================================================
+   First-run tutorial
+   =================================================================== */
+.tutorial {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  color: var(--text);
+  pointer-events: none;
+}
+.tutorial[hidden] { display: none; }
+.tutorial[data-open="true"] { pointer-events: auto; }
+.tutorial__scrim {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+}
+.tutorial__mask {
+  position: absolute;
+  background: oklch(0 0 0 / 0.5);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  pointer-events: none;
+}
+.tutorial__mask--top {
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: var(--tutorial-y, 16px);
+}
+.tutorial__mask--right {
+  left: calc(var(--tutorial-x, 16px) + var(--tutorial-w, 120px));
+  top: var(--tutorial-y, 16px);
+  width: calc(100% - var(--tutorial-x, 16px) - var(--tutorial-w, 120px));
+  height: var(--tutorial-h, 72px);
+}
+.tutorial__mask--bottom {
+  left: 0;
+  top: calc(var(--tutorial-y, 16px) + var(--tutorial-h, 72px));
+  width: 100%;
+  height: calc(100% - var(--tutorial-y, 16px) - var(--tutorial-h, 72px));
+}
+.tutorial__mask--left {
+  left: 0;
+  top: var(--tutorial-y, 16px);
+  width: var(--tutorial-x, 16px);
+  height: var(--tutorial-h, 72px);
+}
+.tutorial__spotlight {
+  position: absolute;
+  left: var(--tutorial-x, 16px);
+  top: var(--tutorial-y, 16px);
+  width: var(--tutorial-w, 120px);
+  height: var(--tutorial-h, 72px);
+  border-radius: var(--tutorial-r, 16px);
+  box-shadow:
+    0 0 0 1px oklch(0.701 0.099 177.349 / 0.88),
+    0 0 0 5px oklch(0.529 0.07 178.573 / 0.14),
+    0 0 38px oklch(0.529 0.07 178.573 / 0.38);
+  pointer-events: none;
+}
+.tutorial__card {
+  position: absolute;
+  left: var(--tutorial-card-x, 14px);
+  top: var(--tutorial-card-y, 84px);
+  width: min(360px, calc(100vw - 28px));
+  margin: 0;
+  padding: 14px;
+  background: oklch(0.146 0.004 285.857 / 0.96);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-border), var(--shadow);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transform: translateY(4px) scale(0.98);
+  opacity: 0;
+  transition:
+    opacity 180ms var(--motion-ease-out),
+    transform 220ms var(--motion-ease-out);
+}
+.tutorial[data-open="true"] .tutorial__card {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+.tutorial__progress {
+  margin: 0 0 7px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "zero" 1;
+}
+.tutorial__title {
+  margin: 0 0 7px;
+  font-family: var(--font-display);
+  font-size: 16px;
+  line-height: 1.2;
+  font-weight: 650;
+}
+.tutorial__body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+.tutorial__body p {
+  margin: 0;
+}
+.tutorial__body p + p {
+  margin-top: 8px;
+}
+.tutorial__link {
+  color: var(--accent-strong);
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+.tutorial__link:hover {
+  text-decoration: underline;
+}
+.tutorial__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+.tutorial__skip,
+.tutorial__next {
+  height: 34px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  padding: 0 12px;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  transition:
+    background-color var(--motion-press-dur) var(--motion-ease-out),
+    border-color var(--motion-press-dur) var(--motion-ease-out),
+    transform var(--motion-press-dur) var(--motion-ease-out);
+}
+.tutorial__skip { background: transparent; color: var(--text-muted); }
+.tutorial__next { background: var(--accent-soft); border-color: oklch(0.529 0.07 178.573 / 0.42); }
+.tutorial__skip:active,
+.tutorial__next:active { transform: scale(0.96); }
 
 /* ===================================================================
    Selection dock (desktop)
@@ -1820,6 +1987,43 @@ body.viewer-loading .hud-actions {
   flex: 0 0 auto;
   color: oklch(0.934 0.012 91.522);
 }
+body.viewer-intro .loading-state[data-closing="true"] {
+  opacity: 1;
+  background: transparent;
+  transition:
+    background 420ms var(--motion-ease-out),
+    opacity 220ms var(--motion-ease-out);
+}
+body.viewer-intro .loading-state[data-closing="true"] .loading-state__text {
+  opacity: 0;
+  transform: translateY(6px);
+  transition:
+    opacity 180ms var(--motion-ease-out),
+    transform 220ms var(--motion-ease-out);
+}
+body.viewer-intro .loading-state[data-closing="true"] .spiral-loader__phase {
+  opacity: 0.18;
+  transform: scale(1.36) rotate(120deg);
+  transition:
+    opacity 520ms var(--motion-ease-out),
+    transform 620ms var(--motion-ease-out);
+}
+body.viewer-intro .loading-state[data-closing="true"] .spiral-loader__phase--fast,
+body.viewer-intro .loading-state[data-closing="true"] .spiral-loader__phase--slow,
+body.viewer-intro .loading-state[data-closing="true"] .spiral-loader__motion,
+body.viewer-intro .loading-state[data-closing="true"] .spiral-loader__path {
+  animation-duration: 620ms;
+  animation-iteration-count: 1;
+  animation-fill-mode: forwards;
+}
+body.viewer-intro .loading-state[data-closing="true"] .spiral-loader__motion {
+  animation-name: spiral-loader-settle-slide;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+body.viewer-intro .loading-state[data-closing="true"] .spiral-loader__path {
+  animation-name: spiral-loader-settle-trim;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
 .spiral-loader__phase {
   position: absolute;
   inset: 0;
@@ -1874,6 +2078,22 @@ body.viewer-loading .hud-actions {
 @keyframes spiral-loader-trim {
   from { stroke-dashoffset: -23; }
   to { stroke-dashoffset: -57; }
+}
+@keyframes spiral-loader-settle-slide {
+  from { transform: translate(-0.5px, 1.5px); }
+  to { transform: translate(-4.5px, 1.5px); }
+}
+@keyframes spiral-loader-settle-trim {
+  from {
+    opacity: 0.24;
+    stroke-dasharray: 21 100;
+    stroke-dashoffset: -23;
+  }
+  to {
+    opacity: 0;
+    stroke-dasharray: 72 100;
+    stroke-dashoffset: -40;
+  }
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -1959,6 +2179,8 @@ body.viewer-loading .hud-actions {
   .legend__section,
   .selection-dock,
   .sheet,
+  .tutorial__card,
+  .tutorial__spotlight,
   .search-field,
   .search-field__clear,
   .hud-toolbar__indicator,
@@ -2363,6 +2585,10 @@ VIEWER_JS = """\
   let renderedSyntheticLabelBoxes = [];
   let canvasSettleTimer = null;
   let resizeFitTimer = null;
+  let graphIntro = null;
+  let graphIntroFrame = null;
+  let tutorialState = null;
+  let tutorialSteps = [];
   const panelHideTimers = new WeakMap();
   // Deferred canvas label redraws: zoom and focus changes can request label
   // updates, but the all-node canvas pass is throttled until interaction settles.
@@ -2619,9 +2845,13 @@ VIEWER_JS = """\
 
   // --- SFX ---
   const sfx = new window.SfxEngine();
-  const DATA_VERSION = "20260629-anchor-lock-1";
+  const DATA_VERSION = "20260629-tutorial-1";
   const LOADING_EXIT_MS = 260;
+  const GRAPH_INTRO_DURATION_MS = 2400;
+  const GRAPH_INTRO_LOADER_MS = 420;
+  const GRAPH_INTRO_FRAME_MS = 33;
   const DRAG_SELECT_THRESHOLD = 5;
+  const TUTORIAL_STORAGE_KEY = "traccia.viewer.tutorial.dismissed.v1";
 
   // --- DOM refs ---
   const $ = (id) => document.getElementById(id);
@@ -2645,6 +2875,8 @@ VIEWER_JS = """\
       "drawer", "drawer-title", "drawer-body", "drawer-close",
       "sheet", "sheet-title", "sheet-body", "sheet-close",
       "empty-state", "loading-state", "loading-message", "filter-bar",
+      "tutorial", "tutorial-scrim", "tutorial-spotlight", "tutorial-card",
+      "tutorial-progress", "tutorial-title", "tutorial-body", "tutorial-skip", "tutorial-next",
     ].forEach(function (id) {
       dom[id.replace(/-/g, "_")] = $(id);
     });
@@ -2671,6 +2903,7 @@ VIEWER_JS = """\
       if (configRes && configRes.ok) {
         viewerConfig = await configRes.json();
       }
+      tutorialSteps = Array.isArray(viewerConfig.tutorialSteps) ? viewerConfig.tutorialSteps : [];
 
       loadStage = "initializing controls";
       initSoundToggle();
@@ -2684,8 +2917,10 @@ VIEWER_JS = """\
       resetView();
       handleDeepLink();
 
+      startGraphIntro();
       finishLoading();
       updateEmptyState();
+      scheduleFirstRunTutorial();
     } catch (err) {
       console.error("Skill map initialization failed during " + loadStage + ".", err);
       showError("Failed to initialize skill map. Check the browser console for details.");
@@ -2704,11 +2939,351 @@ VIEWER_JS = """\
     document.body.classList.remove("viewer-loading");
     if (!dom.loading_state) return;
     dom.loading_state.dataset.closing = "true";
-    var delay = prefersReducedMotion() ? 0 : LOADING_EXIT_MS;
+    var delay = prefersReducedMotion() ? 0 : (isGraphIntroActive() ? GRAPH_INTRO_LOADER_MS : LOADING_EXIT_MS);
     window.setTimeout(function () {
       dom.loading_state.hidden = true;
       delete dom.loading_state.dataset.closing;
     }, delay);
+  }
+
+  function scheduleFirstRunTutorial() {
+    if (hasDismissedTutorial() || !dom.tutorial) return;
+    var delay = prefersReducedMotion() ? 80 : GRAPH_INTRO_DURATION_MS + 220;
+    window.setTimeout(function () {
+      if (!hasDismissedTutorial()) startTutorial();
+    }, delay);
+  }
+
+  function hasDismissedTutorial() {
+    try {
+      return window.localStorage.getItem(TUTORIAL_STORAGE_KEY) === "1";
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function dismissTutorialPermanently() {
+    try {
+      window.localStorage.setItem(TUTORIAL_STORAGE_KEY, "1");
+    } catch (err) {
+      // If storage is blocked, the tutorial still closes for the current page.
+    }
+  }
+
+  function isTutorialActive() {
+    return !!(tutorialState && tutorialState.active);
+  }
+
+  function startTutorial() {
+    if (!dom.tutorial || !tutorialSteps.length || isTutorialActive()) return;
+    tutorialState = { active: true, index: 0 };
+    dom.tutorial.hidden = false;
+    dom.tutorial.dataset.open = "true";
+    document.body.classList.add("viewer-tutorial-active");
+    renderTutorialStep();
+    requestAnimationFrame(function () {
+      if (dom.tutorial_next) dom.tutorial_next.focus();
+    });
+  }
+
+  function replayTutorial() {
+    if (isTutorialActive()) return;
+    setPanelOpen(dom.search_panel, false);
+    setPanelOpen(dom.filter_bar, false);
+    setPanelOpen(dom.settings_panel, false);
+    setPanelOpen(dom.legend, false);
+    [dom.search_toggle, dom.filter_toggle, dom.settings_toggle, dom.legend_toggle].forEach(function (button) {
+      if (button) button.setAttribute("aria-pressed", "false");
+    });
+    startTutorial();
+  }
+
+  function completeTutorial() {
+    dismissTutorialPermanently();
+    if (!dom.tutorial) return;
+    if (tutorialState) tutorialState.active = false;
+    tutorialState = null;
+    dom.tutorial.dataset.open = "false";
+    document.body.classList.remove("viewer-tutorial-active");
+    window.setTimeout(function () {
+      if (!isTutorialActive()) dom.tutorial.hidden = true;
+    }, prefersReducedMotion() ? 0 : 180);
+  }
+
+  function nextTutorialStep() {
+    if (!isTutorialActive()) return;
+    if (tutorialState.index >= tutorialSteps.length - 1) {
+      completeTutorial();
+      return;
+    }
+    tutorialState.index += 1;
+    renderTutorialStep();
+  }
+
+  function renderTutorialStep() {
+    if (!isTutorialActive()) return;
+    var step = tutorialSteps[tutorialState.index];
+    dom.tutorial_progress.textContent = (tutorialState.index + 1) + " / " + tutorialSteps.length;
+    dom.tutorial_title.textContent = step.title;
+    renderTutorialBody(step.body);
+    dom.tutorial_next.textContent = tutorialState.index === tutorialSteps.length - 1 ? "Done" : "Next";
+    updateTutorialSpotlight();
+  }
+
+  function renderTutorialBody(body) {
+    var paragraphs = Array.isArray(body) ? body : [body];
+    dom.tutorial_body.replaceChildren();
+    paragraphs.forEach(function (paragraph) {
+      var p = document.createElement("p");
+      if (typeof paragraph === "string") {
+        p.textContent = paragraph;
+      } else {
+        p.appendChild(document.createTextNode(paragraph.before || ""));
+        var link = document.createElement("a");
+        link.className = "tutorial__link";
+        link.href = paragraph.href;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        link.textContent = paragraph.linkText || paragraph.href;
+        p.appendChild(link);
+        p.appendChild(document.createTextNode(paragraph.after || ""));
+      }
+      dom.tutorial_body.appendChild(p);
+    });
+  }
+
+  function updateTutorialSpotlight() {
+    if (!isTutorialActive() || !dom.tutorial_spotlight || !dom.tutorial_card) return;
+    var step = tutorialSteps[tutorialState.index];
+    var rect = tutorialTargetRect(step);
+    var pad = step.pad == null ? 10 : step.pad;
+    var x = Math.max(8, rect.left - pad);
+    var y = Math.max(8, rect.top - pad);
+    var w = Math.min(window.innerWidth - x - 8, rect.width + pad * 2);
+    var h = Math.min(window.innerHeight - y - 8, rect.height + pad * 2);
+    var radius = step.radius == null ? 14 : step.radius;
+    dom.tutorial_spotlight.style.setProperty("--tutorial-x", x + "px");
+    dom.tutorial_spotlight.style.setProperty("--tutorial-y", y + "px");
+    dom.tutorial_spotlight.style.setProperty("--tutorial-w", Math.max(44, w) + "px");
+    dom.tutorial_spotlight.style.setProperty("--tutorial-h", Math.max(44, h) + "px");
+    dom.tutorial_spotlight.style.setProperty("--tutorial-r", radius + "px");
+    if (dom.tutorial) {
+      dom.tutorial.style.setProperty("--tutorial-x", x + "px");
+      dom.tutorial.style.setProperty("--tutorial-y", y + "px");
+      dom.tutorial.style.setProperty("--tutorial-w", Math.max(44, w) + "px");
+      dom.tutorial.style.setProperty("--tutorial-h", Math.max(44, h) + "px");
+    }
+    requestAnimationFrame(function () {
+      positionTutorialCard({ left: x, top: y, width: w, height: h });
+    });
+  }
+
+  function tutorialTargetRect(step) {
+    if (step.target === "screen") {
+      return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    }
+    var target = dom[step.target] || dom.canvas;
+    if (!target || !target.getBoundingClientRect) {
+      return { left: 24, top: 84, width: 220, height: 140 };
+    }
+    var rect = target.getBoundingClientRect();
+    if (step.target !== "canvas") return rect;
+    return {
+      left: rect.left + rect.width * 0.18,
+      top: rect.top + rect.height * 0.18,
+      width: rect.width * 0.64,
+      height: rect.height * 0.46,
+    };
+  }
+
+  function positionTutorialCard(targetRect) {
+    if (!dom.tutorial_card) return;
+    var margin = 14;
+    var cardRect = dom.tutorial_card.getBoundingClientRect();
+    var cardW = Math.min(360, window.innerWidth - margin * 2);
+    var cardH = cardRect.height || 170;
+    var x = targetRect.left + targetRect.width / 2 - cardW / 2;
+    x = Math.max(margin, Math.min(window.innerWidth - cardW - margin, x));
+    var below = targetRect.top + targetRect.height + 14;
+    var above = targetRect.top - cardH - 14;
+    var y = below + cardH <= window.innerHeight - margin ? below : above;
+    if (y < margin) y = Math.max(margin, window.innerHeight - cardH - margin);
+    dom.tutorial_card.style.setProperty("--tutorial-card-x", x + "px");
+    dom.tutorial_card.style.setProperty("--tutorial-card-y", y + "px");
+  }
+
+  function startGraphIntro() {
+    if (!layoutCache || prefersReducedMotion()) {
+      graphIntro = null;
+      document.body.classList.remove("viewer-intro");
+      return;
+    }
+    if (graphIntroFrame) {
+      cancelAnimationFrame(graphIntroFrame);
+      graphIntroFrame = null;
+    }
+    graphIntro = {
+      active: true,
+      startedAt: null,
+      lastPaintAt: null,
+      progress: 0,
+      duration: GRAPH_INTRO_DURATION_MS,
+      startView: graphIntroRootViewState(),
+      endView: cloneViewState(viewState),
+    };
+    document.body.classList.add("viewer-intro");
+    setViewImmediate(graphIntro.startView);
+    renderGraph();
+
+    function step(now) {
+      if (!graphIntro || !graphIntro.active) return;
+      if (graphIntro.startedAt == null) graphIntro.startedAt = now;
+      var raw = (now - graphIntro.startedAt) / graphIntro.duration;
+      graphIntro.progress = Math.max(0, Math.min(1, raw));
+      setViewImmediate(graphIntroViewState());
+      var shouldPaint = graphIntro.lastPaintAt == null ||
+        now - graphIntro.lastPaintAt >= GRAPH_INTRO_FRAME_MS ||
+        graphIntro.progress >= 1;
+      if (shouldPaint) {
+        graphIntro.lastPaintAt = now;
+        renderCanvas();
+        applyFocusDisplayToSvg();
+        syncGraphIntroSvgOverlay();
+        renderMinimapViewport();
+      }
+      applyViewTransform();
+      if (graphIntro.progress < 1) {
+        graphIntroFrame = requestAnimationFrame(step);
+        return;
+      }
+      graphIntroFrame = null;
+      setViewImmediate(graphIntro.endView);
+      graphIntro = null;
+      document.body.classList.remove("viewer-intro");
+      renderGraph();
+      renderMinimap();
+    }
+
+    graphIntroFrame = requestAnimationFrame(step);
+  }
+
+  function graphIntroRootViewState() {
+    var rect = dom.canvas.getBoundingClientRect();
+    var rootPoint = graphIntroOriginPoint();
+    var fittedScale = safeViewScale();
+    var rootScale = Math.min(VIEW.maxScale, Math.max(0.92, fittedScale * 8.5));
+    return viewForGraphPointAtScreen(
+      Math.max(1, rect.width) / 2,
+      Math.max(1, rect.height) / 2,
+      rootPoint.x,
+      rootPoint.y,
+      rootScale
+    );
+  }
+
+  function graphIntroViewState() {
+    if (!graphIntro) return viewState;
+    var t = graphIntroZoomProgress();
+    return {
+      x: lerp(graphIntro.startView.x, graphIntro.endView.x, t),
+      y: lerp(graphIntro.startView.y, graphIntro.endView.y, t),
+      scale: lerp(graphIntro.startView.scale, graphIntro.endView.scale, t),
+    };
+  }
+
+  function isGraphIntroActive() {
+    return !!(graphIntro && graphIntro.active);
+  }
+
+  function isGraphIntroBlockingInput() {
+    return isGraphIntroActive();
+  }
+
+  function blockGraphIntroInput(event) {
+    if (!isGraphIntroBlockingInput()) return false;
+    if (event && event.cancelable) event.preventDefault();
+    if (event && event.stopPropagation) event.stopPropagation();
+    return true;
+  }
+
+  function graphIntroGlobalProgress() {
+    return isGraphIntroActive() ? graphIntro.progress : 1;
+  }
+
+  function graphIntroZoomProgress() {
+    if (!isGraphIntroActive()) return 1;
+    var t = (graphIntro.progress - 0.22) / 0.34;
+    return easeInOut(Math.max(0, Math.min(1, t)));
+  }
+
+  function graphIntroRevealProgress() {
+    if (!isGraphIntroActive()) return 1;
+    var t = (graphIntro.progress - 0.58) / 0.42;
+    return easeInOut(Math.max(0, Math.min(1, t)));
+  }
+
+  function graphIntroLabelsVisible() {
+    return graphIntroRevealProgress() >= 0.78;
+  }
+
+  function graphIntroDepth(id) {
+    if (!layoutCache || !id || id === "__tree_root__") return 0;
+    var depth = 0;
+    var current = id;
+    var seen = new Set();
+    while (layoutCache.branchParents[current] && !seen.has(current)) {
+      seen.add(current);
+      depth += 1;
+      current = layoutCache.branchParents[current];
+      if (depth >= 4) return 4;
+    }
+    return Math.min(depth || 3, 4);
+  }
+
+  function graphIntroNodeProgress(id) {
+    if (!isGraphIntroActive()) return 1;
+    if (id === "__tree_root__") return 1;
+    var depth = graphIntroDepth(id);
+    var target = layoutCache && layoutCache.positions ? layoutCache.positions[id] : null;
+    var angle = target && Number.isFinite(target.angle) ? target.angle : seededUnit(id, 83) * Math.PI * 2;
+    var directionalDelay = (angle + Math.PI) / (Math.PI * 2) * 0.16;
+    var jitterDelay = seededUnit(id, 89) * 0.08;
+    var delay = Math.min(0.55, depth * 0.08 + directionalDelay + jitterDelay);
+    var span = Math.max(0.22, 0.74 - delay * 0.35);
+    var revealProgress = graphIntroRevealProgress();
+    var t = (revealProgress - delay) / span;
+    return easeInOut(Math.max(0, Math.min(1, t)));
+  }
+
+  function graphIntroOriginPoint() {
+    if (!layoutCache || !layoutCache.positions) return { x: 0, y: 0, angle: -Math.PI / 2, radius: 0 };
+    return layoutCache.positions.__tree_root__ || { x: 0, y: 0, angle: -Math.PI / 2, radius: 0 };
+  }
+
+  function graphIntroDisplayPoint(id, target) {
+    if (!isGraphIntroActive() || !target) return target;
+    var origin = graphIntroOriginPoint();
+    var t = graphIntroNodeProgress(id);
+    return {
+      x: lerp(origin.x, target.x, t),
+      y: lerp(origin.y, target.y, t),
+      angle: Number.isFinite(target.angle) ? target.angle : Math.atan2(target.y / 0.92, target.x),
+      radius: lerp(0, Number.isFinite(target.radius) ? target.radius : Math.hypot(target.x, target.y / 0.92), t),
+    };
+  }
+
+  function graphIntroAlpha(id) {
+    if (!isGraphIntroActive()) return 1;
+    var t = graphIntroNodeProgress(id);
+    if (id === "__tree_root__") return 1;
+    return Math.max(0, Math.min(1, (t - 0.05) / 0.95));
+  }
+
+  function graphIntroScale(id) {
+    if (!isGraphIntroActive()) return 1;
+    var t = graphIntroNodeProgress(id);
+    if (id === "__tree_root__") return 1;
+    return 0.18 + t * 0.82;
   }
 
   function prefersReducedMotion() {
@@ -3663,8 +4238,10 @@ VIEWER_JS = """\
 
   function getDisplayPoint(id) {
     var state = focusDisplay || emptyFocusDisplay();
-    if (state.points && state.points.has(id)) return state.points.get(id);
-    return layoutCache && layoutCache.positions ? layoutCache.positions[id] : null;
+    var point = state.points && state.points.has(id) ?
+      state.points.get(id) :
+      (layoutCache && layoutCache.positions ? layoutCache.positions[id] : null);
+    return graphIntroDisplayPoint(id, point);
   }
 
   function getDisplayAlpha(id) {
@@ -3673,13 +4250,13 @@ VIEWER_JS = """\
     if (value === 1 && state.active && !(state.focusIds && state.focusIds.has(id))) {
       value = viewSettings.contextDimming;
     }
-    return Math.max(0, Math.min(1, value));
+    return Math.max(0, Math.min(1, value * graphIntroAlpha(id)));
   }
 
   function getDisplayScale(id) {
     var state = focusDisplay || emptyFocusDisplay();
     var value = state.scales && state.scales.has(id) ? state.scales.get(id) : 1;
-    return Math.max(0.12, Math.min(1.4, value));
+    return Math.max(0.12, Math.min(1.4, value * graphIntroScale(id)));
   }
 
   function getHitPriority(id) {
@@ -3728,6 +4305,20 @@ VIEWER_JS = """\
       if (!from || !to) return;
       el.setAttribute("d", straightPath(from, to));
       el.style.opacity = String(0.96 * Math.min(getDisplayAlpha(fromId), getDisplayAlpha(toId)));
+    });
+  }
+
+  function syncGraphIntroSvgOverlay() {
+    if (!isGraphIntroActive() || !layoutCache) return;
+    svgNodeElements.forEach(function (el, id) {
+      updateFocusNodeElement(el, id);
+    });
+    svgEdgeElements.forEach(function (edge) {
+      var from = getDisplayPoint(edge.fromId);
+      var to = getDisplayPoint(edge.toId);
+      if (!from || !to) return;
+      edge.el.setAttribute("d", straightPath(from, to));
+      edge.el.style.opacity = String(0.96 * Math.min(getDisplayAlpha(edge.fromId), getDisplayAlpha(edge.toId)));
     });
   }
 
@@ -4216,6 +4807,7 @@ VIEWER_JS = """\
       var mediumDetail = detail.mediumDetail;
       var stale = isStale(node);
       var displayAlpha = getDisplayAlpha(node.id);
+      if (isGraphIntroActive() && displayAlpha <= 0.01) return;
       var drawR = nodeVisualRadius(node);
 
       // Glow for selected/focused nodes.
@@ -4322,6 +4914,7 @@ VIEWER_JS = """\
 
   function renderCanvasSkillLabels(ctx, canvasNodeIds) {
     if (!layoutCache || !viewSettings.showSkillLabels) return;
+    if (!graphIntroLabelsVisible()) return;
     var candidates = [];
     canvasNodeIds.forEach(function (id) {
       var node = nodeById.get(id);
@@ -4751,23 +5344,26 @@ VIEWER_JS = """\
     Object.keys(bboxes).forEach(function (domain) {
       if (isDomainCollapsed(domain)) return;
       var bbox = bboxes[domain];
-      if (!pointInBounds({ x: bbox.centerX, y: bbox.centerY }, bounds)) return;
+      var center = getDisplayPoint(bbox.areaNodeId) || { x: bbox.centerX, y: bbox.centerY };
+      var introProgress = graphIntroNodeProgress(bbox.areaNodeId);
+      if (isGraphIntroActive() && introProgress <= 0.04) return;
+      if (!pointInBounds(center, bounds)) return;
       var color = domainBackdropColor(domain);
       var viewScale = safeViewScale();
-      var r = 52 / Math.max(viewScale, 0.24);
-      var grad = ctx.createRadialGradient(bbox.centerX, bbox.centerY, 0, bbox.centerX, bbox.centerY, r);
+      var r = (52 * introProgress) / Math.max(viewScale, 0.24);
+      var grad = ctx.createRadialGradient(center.x, center.y, 0, center.x, center.y, r);
       grad.addColorStop(0, color.fill);
       grad.addColorStop(1, "rgba(0, 0, 0, 0)");
       ctx.fillStyle = grad;
-      ctx.globalAlpha = 0.85;
+      ctx.globalAlpha = 0.85 * introProgress;
       ctx.beginPath();
-      ctx.arc(bbox.centerX, bbox.centerY, r, 0, Math.PI * 2);
+      ctx.arc(center.x, center.y, r, 0, Math.PI * 2);
       ctx.fill();
       ctx.globalAlpha = 1;
       ctx.lineWidth = 1 / viewScale;
       ctx.strokeStyle = color.stroke;
       ctx.beginPath();
-      ctx.arc(bbox.centerX, bbox.centerY, 28 / Math.max(viewScale, 0.35), 0, Math.PI * 2);
+      ctx.arc(center.x, center.y, (28 * introProgress) / Math.max(viewScale, 0.35), 0, Math.PI * 2);
       ctx.stroke();
     });
   }
@@ -4775,7 +5371,7 @@ VIEWER_JS = """\
   function renderSyntheticTreeNodes(ctx, bounds) {
     if (!layoutCache) return;
     ctx.save();
-    var labelReservedBoxes = syntheticTreeLabelReservedBoxes(bounds);
+    var labelReservedBoxes = null;
     (layoutCache.treeNodes || []).forEach(function (node) {
       if (!node._synthetic) return;
       if (node.kind !== "tree-root" && isDomainCollapsed(node._visualGroup)) {
@@ -4808,6 +5404,7 @@ VIEWER_JS = """\
         var labelSize = node.kind === "tree-root" ? 18 : node.kind === "branch-topic" ? 12 : 14;
         var labelPoint = syntheticTreeLabelPoint(node, p, r);
         var labelBox = syntheticTreeLabelBox(node, p, r);
+        if (!labelReservedBoxes) labelReservedBoxes = syntheticTreeLabelReservedBoxes(bounds);
         if (!syntheticTreeLabelCanRender(node, labelBox, labelReservedBoxes)) {
           ctx.globalAlpha = 1;
           return;
@@ -4826,6 +5423,7 @@ VIEWER_JS = """\
   }
 
   function shouldRenderSyntheticTreeLabel(node) {
+    if (!graphIntroLabelsVisible()) return false;
     if (!viewSettings.showCategories || !viewSettings.showCategoryLabels) return false;
     if (node.kind === "tree-root") return true;
     if (node.kind === "skill-area") return false;
@@ -4922,8 +5520,13 @@ VIEWER_JS = """\
 
   function renderZoomBranchLinks(ctx, bounds, canvasNodeIds) {
     if (!layoutCache) return;
-    var pos = layoutCache.positions;
     var localBounds = bounds || getGraphViewportBounds(VIEW.canvasEdgeCullPad);
+    var viewScale = safeViewScale();
+    var widthScale = Math.sqrt(viewSettings.lineStrength) / viewScale;
+    var lowDetail = viewScale < VIEW.detailZoomMedium;
+    var canBatch = !isGraphIntroActive() && !(focusDisplay && focusDisplay.active);
+    var batchedLinks = Object.create(null);
+    var batchOrder = [];
     ctx.save();
     ctx.lineCap = "round";
     (layoutCache.treeLinks || []).forEach(function (link) {
@@ -4933,15 +5536,44 @@ VIEWER_JS = """\
       if (!from || !to) return;
       if (!segmentIntersectsBounds(from, to, localBounds)) return;
 
-      ctx.strokeStyle = resolvedVisualGroupColors[link.area] || "#38796c";
-      var viewScale = safeViewScale();
-      ctx.lineWidth = ((link.depth === 1 ? 1.55 : link.depth === 2 ? 1.16 : 0.82) * Math.sqrt(viewSettings.lineStrength)) / viewScale;
-      ctx.globalAlpha = Math.min(1, viewSettings.lineStrength * Math.min(getDisplayAlpha(link.fromId), getDisplayAlpha(link.toId)) * (viewScale < VIEW.detailZoomMedium ?
+      var color = resolvedVisualGroupColors[link.area] || "#38796c";
+      var lineWidth = (link.depth === 1 ? 1.55 : link.depth === 2 ? 1.16 : 0.82) * widthScale;
+      var displayAlpha = canBatch ? 1 : Math.min(getDisplayAlpha(link.fromId), getDisplayAlpha(link.toId));
+      var alpha = Math.min(1, viewSettings.lineStrength * displayAlpha * (lowDetail ?
         (link.depth === 3 ? 0.2 : 0.36) :
         (link.depth === 3 ? 0.28 : 0.46)));
+      if (alpha <= 0.01) return;
+      if (canBatch) {
+        var key = link.area + "|" + link.depth;
+        var batch = batchedLinks[key];
+        if (!batch) {
+          batch = { color: color, lineWidth: lineWidth, alpha: alpha, segments: [] };
+          batchedLinks[key] = batch;
+          batchOrder.push(batch);
+        }
+        batch.segments.push(from.x, from.y, to.x, to.y);
+        return;
+      }
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.globalAlpha = alpha;
       ctx.beginPath();
       ctx.moveTo(from.x, from.y);
       ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+    });
+
+    batchOrder.forEach(function (batch) {
+      if (!batch.segments.length) return;
+      ctx.strokeStyle = batch.color;
+      ctx.lineWidth = batch.lineWidth;
+      ctx.globalAlpha = batch.alpha;
+      ctx.beginPath();
+      for (var i = 0; i < batch.segments.length; i += 4) {
+        ctx.moveTo(batch.segments[i], batch.segments[i + 1]);
+        ctx.lineTo(batch.segments[i + 2], batch.segments[i + 3]);
+      }
       ctx.stroke();
     });
 
@@ -4979,6 +5611,10 @@ VIEWER_JS = """\
     var ns = "http://www.w3.org/2000/svg";
     var fragment = document.createDocumentFragment();
     domainLabelElements = new Map();
+    if (!graphIntroLabelsVisible()) {
+      dom.graph_domain_labels.replaceChildren(fragment);
+      return;
+    }
     if (!viewSettings.showCategories || !viewSettings.showCategoryLabels) {
       dom.graph_domain_labels.replaceChildren(fragment);
       return;
@@ -7165,6 +7801,7 @@ VIEWER_JS = """\
     var startX, startY, startViewX, startViewY;
 
     dom.canvas.addEventListener("mousedown", function (e) {
+      if (blockGraphIntroInput(e)) return;
       if (e.button !== 0) return;
       if (e.target.closest(".domain-label")) return;
       stopViewTween();
@@ -7186,6 +7823,7 @@ VIEWER_JS = """\
     });
 
     window.addEventListener("mousemove", function (e) {
+      if (isGraphIntroBlockingInput()) return;
       if (!pendingPan && !isPanning) return;
       var dx = e.clientX - startX;
       var dy = e.clientY - startY;
@@ -7210,6 +7848,13 @@ VIEWER_JS = """\
     });
 
     window.addEventListener("mouseup", function (e) {
+      if (isGraphIntroBlockingInput()) {
+        pendingPan = false;
+        isPanning = false;
+        cameraGestureActive = false;
+        dom.canvas.classList.remove("panning");
+        return;
+      }
       if (isPanning) {
         if (!startPanInertia()) scheduleSettledCanvasRedraw(VIEW.cameraPanSettleMs);
       }
@@ -7224,6 +7869,7 @@ VIEWER_JS = """\
 
     // Click empty canvas: hit-test for canvas-only nodes, else deselect.
     dom.canvas.addEventListener("click", function (e) {
+      if (blockGraphIntroInput(e)) return;
       if (suppressNextGraphClick) {
         suppressNextGraphClick = false;
         e.preventDefault();
@@ -7255,6 +7901,7 @@ VIEWER_JS = """\
 
     // Wheel zoom
     dom.canvas.addEventListener("wheel", function (e) {
+      if (blockGraphIntroInput(e)) return;
       e.preventDefault();
       var rect = dom.canvas.getBoundingClientRect();
       var clientPoint = wheelClientPoint(e);
@@ -7267,6 +7914,7 @@ VIEWER_JS = """\
     // Touch pan/pinch
     var touchState = null;
     dom.canvas.addEventListener("touchstart", function (e) {
+      if (blockGraphIntroInput(e)) return;
       sfx.unlock();
       stopViewTween();
       stopCameraAnimation();
@@ -7299,6 +7947,7 @@ VIEWER_JS = """\
     }, { passive: true });
 
     dom.canvas.addEventListener("touchmove", function (e) {
+      if (blockGraphIntroInput(e)) return;
       if (!touchState) return;
       e.preventDefault();
       if (touchState.mode === "pan" && e.touches.length === 1) {
@@ -7324,6 +7973,11 @@ VIEWER_JS = """\
     }, { passive: false });
 
     dom.canvas.addEventListener("touchend", function () {
+      if (isGraphIntroBlockingInput()) {
+        touchState = null;
+        cameraGestureActive = false;
+        return;
+      }
       if (touchState) {
         if (touchState.mode !== "pan" || !startPanInertia()) {
           scheduleSettledCanvasRedraw(VIEW.cameraPanSettleMs);
@@ -7335,6 +7989,7 @@ VIEWER_JS = """\
   }
 
   function zoomAt(anchor, event) {
+    if (isGraphIntroBlockingInput()) return;
     stopViewTween();
     stopPanInertia();
     var pixels = normalizedWheelPixels(event);
@@ -7962,9 +8617,22 @@ VIEWER_JS = """\
       updateSoundToggle(nowOn);
     });
     dom.reset_view.addEventListener("click", function () {
+      if (isGraphIntroBlockingInput()) return;
       sfx.dockButton();
       resetView(true);
     });
+    if (dom.tutorial_next) {
+      dom.tutorial_next.addEventListener("click", function () {
+        sfx.dockButton();
+        nextTutorialStep();
+      });
+    }
+    if (dom.tutorial_skip) {
+      dom.tutorial_skip.addEventListener("click", function () {
+        sfx.dockButton();
+        completeTutorial();
+      });
+    }
 
     // Drawer/sheet close
     dom.drawer_close.addEventListener("click", closeDrawer);
@@ -7974,6 +8642,26 @@ VIEWER_JS = """\
 
     // Keyboard navigation (decision 39)
     document.addEventListener("keydown", function (e) {
+      if (isTutorialActive()) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          completeTutorial();
+          return;
+        }
+        if ((e.key === "Enter" || e.key === "ArrowRight") &&
+            !(e.target && e.target.closest && e.target.closest(".tutorial__actions"))) {
+          e.preventDefault();
+          nextTutorialStep();
+          return;
+        }
+      }
+      if (isGraphIntroBlockingInput()) {
+        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "r", "R", "Escape"].indexOf(e.key) !== -1) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
       // Ignore if typing in an input
       if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") {
         if (e.key === "Escape" && e.target === dom.search_input) {
@@ -7997,7 +8685,15 @@ VIEWER_JS = """\
           break;
         case "/":
           e.preventDefault();
+          if (e.shiftKey) {
+            replayTutorial();
+            break;
+          }
           openSearchPanel();
+          break;
+        case "?":
+          e.preventDefault();
+          replayTutorial();
           break;
         case "r": case "R":
           resetView(true);
@@ -8044,6 +8740,7 @@ VIEWER_JS = """\
         resizeCanvas();
         resolveDomainColors();
         resetView();
+        updateTutorialSpotlight();
         syncActiveToolbarIndicator();
       }, 80);
     });

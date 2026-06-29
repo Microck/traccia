@@ -399,6 +399,44 @@ def test_export_viewer_with_no_sound_flag(tmp_path: Path) -> None:
     export_viewer(tmp_path, enable_sound=False)
     config = json.loads((tmp_path / "exports" / "viewer" / "config.json").read_text())
     assert config["enableSound"] is False
+    assert "tutorialSteps" not in config
+
+
+def test_export_viewer_merges_site_specific_tutorial_config(tmp_path: Path) -> None:
+    """Personal onboarding copy is opt-in project config, not bundled for every viewer."""
+    _write_minimal_graph(tmp_path)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "viewer-tutorial.json").write_text(
+        json.dumps(
+            {
+                "tutorialSteps": [
+                    {
+                        "target": "screen",
+                        "title": "What is this?",
+                        "body": [
+                            "Site-specific intro.",
+                            {
+                                "before": "Made with ",
+                                "linkText": "Traccia",
+                                "href": "https://github.com/Microck/traccia",
+                                "after": ". You can build your own skill tree too!",
+                            },
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+
+    export_viewer(tmp_path)
+
+    config = json.loads((tmp_path / "exports" / "viewer" / "config.json").read_text())
+    assert config["tutorialSteps"][0]["body"][0] == "Site-specific intro."
+    assert config["tutorialSteps"][0]["body"][1]["linkText"] == "Traccia"
+    assert config["tutorialSteps"][0]["body"][1]["after"].endswith(
+        "You can build your own skill tree too!"
+    )
 
 
 def test_export_viewer_html_references_assets_and_data(tmp_path: Path) -> None:
@@ -417,7 +455,7 @@ def test_export_viewer_html_references_assets_and_data(tmp_path: Path) -> None:
     assert "assets/viewer.js?v=" in html
     assert "assets/sfx.js?v=" in html
     assert "graph.json?v=" in html
-    assert "20260629-anchor-lock-1" in html
+    assert "20260629-tutorial-1" in html
     assert "graph.json" in html
     assert "config.json" in html or "config.json" not in html  # config is fetched dynamically
 
@@ -630,6 +668,20 @@ def test_export_viewer_installs_motion_transition_hooks(tmp_path: Path) -> None:
 
     assert 'aria-label="Toggle sound" aria-pressed="true"' in html
     assert 'class="t-icon-swap sound-icon-swap" data-state="on"' in html
+    assert 'aria-label="Toggle legend"' in html
+    assert '<h2 class="legend__title">Legend</h2>' in html
+    assert 'id="tutorial"' in html
+    assert 'role="dialog" aria-modal="true"' in html
+    assert 'class="tutorial__mask tutorial__mask--top"' in html
+    assert 'class="tutorial__mask tutorial__mask--right"' in html
+    assert 'class="tutorial__mask tutorial__mask--bottom"' in html
+    assert 'class="tutorial__mask tutorial__mask--left"' in html
+    assert 'id="tutorial-progress">1 / 1</p>' in html
+    assert 'id="tutorial-skip" type="button">Skip</button>' in html
+    assert 'id="tutorial-next" type="button">Next</button>' in html
+    assert "This is a map of the skills I have picked up over years on the internet." not in js
+    assert "Everything shown here is backed by things I have done in the past" not in js
+    assert 'title: "How it was made"' not in js
     assert 'class="filter-panel t-panel-slide"' in html
     assert 'class="legend t-panel-slide"' in html
     assert 'class="selection-dock t-panel-slide"' in html
@@ -656,6 +708,22 @@ def test_export_viewer_installs_motion_transition_hooks(tmp_path: Path) -> None:
     assert "toolbar-indicator-width" not in js
     assert ".spiral-loader__phase--fast" in css
     assert ".spiral-loader__path" in css
+    assert ".tutorial__spotlight" in css
+    assert ".tutorial__card" in css
+    assert ".tutorial__body p + p" in css
+    assert ".tutorial__link" in css
+    tutorial_scrim_rule = css.split(".tutorial__scrim", 1)[1].split("}", 1)[0]
+    assert "background: transparent" in tutorial_scrim_rule
+    assert "backdrop-filter" not in tutorial_scrim_rule
+    tutorial_mask_rule = css.split(".tutorial__mask", 1)[1].split("}", 1)[0]
+    assert "background: oklch(0 0 0 / 0.5)" in tutorial_mask_rule
+    assert "backdrop-filter: blur(5px)" in tutorial_mask_rule
+    tutorial_spotlight_rule = css.split(".tutorial__spotlight", 1)[1].split("}", 1)[0]
+    tutorial_card_rule = css.split(".tutorial__card", 1)[1].split("}", 1)[0]
+    assert "9999px" not in tutorial_spotlight_rule
+    assert "transition:" not in tutorial_spotlight_rule
+    assert "left 220ms" not in tutorial_card_rule
+    assert "top 220ms" not in tutorial_card_rule
     assert "@keyframes spiral-loader-fast-phase" in css
     assert "@keyframes spiral-loader-slow-phase" in css
     assert "@keyframes spiral-loader-slide" in css
@@ -677,7 +745,27 @@ def test_export_viewer_installs_motion_transition_hooks(tmp_path: Path) -> None:
     assert "prefers-reduced-motion: reduce" in css
     assert ".t-panel-slide" in css
 
-    assert 'const DATA_VERSION = "20260629-anchor-lock-1"' in js
+    assert 'const DATA_VERSION = "20260629-tutorial-1"' in js
+    assert 'const TUTORIAL_STORAGE_KEY = "traccia.viewer.tutorial.dismissed.v1"' in js
+    assert "function scheduleFirstRunTutorial" in js
+    assert "function startTutorial" in js
+    assert "function replayTutorial" in js
+    assert "function completeTutorial" in js
+    assert "function renderTutorialBody" in js
+    assert "Array.isArray(body) ? body : [body]" in js
+    assert "dom.tutorial_body.replaceChildren()" in js
+    assert "document.createElement(\"a\")" in js
+    assert "link.rel = \"noreferrer\"" in js
+    assert "window.localStorage.getItem(TUTORIAL_STORAGE_KEY)" in js
+    assert "window.localStorage.setItem(TUTORIAL_STORAGE_KEY, \"1\")" in js
+    assert "tutorialSteps = Array.isArray(viewerConfig.tutorialSteps)" in js
+    assert "if (!dom.tutorial || !tutorialSteps.length || isTutorialActive()) return;" in js
+    assert 'return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }' in js
+    assert 'dom.tutorial.style.setProperty("--tutorial-x", x + "px")' in js
+    assert 'case "?":' in js
+    assert "if (e.shiftKey)" in js
+    assert "replayTutorial();" in js
+    assert "updateTutorialSpotlight()" in js
     assert "function setPanelOpen" in js
     assert "function setDetailSurfaceOpen" in js
     assert 'swap.dataset.state = on ? "on" : "off"' in js
@@ -714,7 +802,7 @@ def test_export_viewer_applies_lightweight_default_filters(tmp_path: Path) -> No
     html = (export_root / "index.html").read_text()
     js = (export_root / "assets" / "viewer.js").read_text()
 
-    assert "20260629-anchor-lock-1" in html
+    assert "20260629-tutorial-1" in html
     assert '<label class="filterbar__label" for="filter-domain">Area</label>' in html
     assert '<option value="">All areas</option>' in html
     assert "<h3 class=\"legend__heading\">Skill areas</h3>" in html
@@ -862,6 +950,10 @@ def test_viewer_js_renders_text_consistently_across_zoom(tmp_path: Path) -> None
         "function treeLinkVisible", 1
     )[0]
     assert "var localBounds = bounds || getGraphViewportBounds(VIEW.canvasEdgeCullPad)" in branch_links_body
+    assert "var canBatch = !isGraphIntroActive() && !(focusDisplay && focusDisplay.active)" in branch_links_body
+    assert "var batchedLinks = Object.create(null)" in branch_links_body
+    assert "batch.segments.push(from.x, from.y, to.x, to.y)" in branch_links_body
+    assert "for (var i = 0; i < batch.segments.length; i += 4)" in branch_links_body
     assert "safeViewScale() < VIEW.detailZoomMedium ? VIEW.canvasEdgeCullPad : 24" not in branch_links_body
     assert '(11 / viewScale) + "px sans-serif"' not in render_canvas_body
     assert "canvasLevelTextFontSize(drawR)" in render_canvas_body
@@ -880,7 +972,8 @@ def test_viewer_js_renders_text_consistently_across_zoom(tmp_path: Path) -> None
     synthetic_body = js.split("function renderSyntheticTreeNodes", 1)[1].split(
         "function shouldRenderSyntheticTreeLabel", 1
     )[0]
-    assert "var labelReservedBoxes = syntheticTreeLabelReservedBoxes(bounds)" in synthetic_body
+    assert "var labelReservedBoxes = null" in synthetic_body
+    assert "if (!labelReservedBoxes) labelReservedBoxes = syntheticTreeLabelReservedBoxes(bounds)" in synthetic_body
     assert "var labelBox = syntheticTreeLabelBox(node, p, r)" in synthetic_body
     assert "if (!syntheticTreeLabelCanRender(node, labelBox, labelReservedBoxes))" in synthetic_body
     assert "labelReservedBoxes.push(labelBox)" in synthetic_body
@@ -923,6 +1016,50 @@ def test_viewer_js_uses_generated_skill_tree_layout_contract(tmp_path: Path) -> 
     assert "function slugifySyntheticId" in js
     assert "originX" in js
     assert "areaNodeId" in js
+
+
+def test_viewer_animates_loader_into_center_out_tree_reveal(tmp_path: Path) -> None:
+    """The initial loading spinner should hand off to a center-out tree reveal."""
+    _write_minimal_graph(tmp_path)
+    export_viewer(tmp_path)
+    export_root = tmp_path / "exports" / "viewer"
+    css = (export_root / "assets" / "viewer.css").read_text()
+    js = (export_root / "assets" / "viewer.js").read_text()
+
+    assert "body.viewer-intro .loading-state[data-closing=\"true\"]" in css
+    assert "body.viewer-intro .viewport__canvas" in css
+    assert ".spiral-loader::before" not in css
+    assert ".spiral-loader::after" not in css
+    assert "spiral-loader-settle-slide" in css
+    assert "spiral-loader-settle-trim" in css
+    assert "function startGraphIntro" in js
+    assert "function graphIntroRootViewState" in js
+    assert "function graphIntroViewState" in js
+    assert "function graphIntroZoomProgress" in js
+    assert "function graphIntroRevealProgress" in js
+    assert "function blockGraphIntroInput" in js
+    assert "startedAt: null" in js
+    assert "lastPaintAt: null" in js
+    assert "startView: graphIntroRootViewState()" in js
+    assert "endView: cloneViewState(viewState)" in js
+    assert "setViewImmediate(graphIntro.startView);" in js
+    assert "if (graphIntro.startedAt == null) graphIntro.startedAt = now;" in js
+    assert "setViewImmediate(graphIntroViewState());" in js
+    assert "GRAPH_INTRO_FRAME_MS = 33" in js
+    assert "now - graphIntro.lastPaintAt >= GRAPH_INTRO_FRAME_MS" in js
+    assert "if (isGraphIntroActive() && displayAlpha <= 0.01) return;" in js
+    assert "var t = (graphIntro.progress - 0.22) / 0.34;" in js
+    assert "var t = (graphIntro.progress - 0.58) / 0.42;" in js
+    assert "function graphIntroDisplayPoint" in js
+    assert "function graphIntroNodeProgress" in js
+    assert "directionalDelay" in js
+    assert "jitterDelay" in js
+    assert "syncGraphIntroSvgOverlay();" in js
+    assert "startGraphIntro();" in js
+    assert "GRAPH_INTRO_LOADER_MS" in js
+    assert "prefersReducedMotion()" in js
+    assert "if (blockGraphIntroInput(e)) return;" in js
+    assert "if (isGraphIntroBlockingInput()) return;" in js
 
 
 def test_viewer_js_uses_adaptive_topic_breathing_layout_contract(tmp_path: Path) -> None:
@@ -997,7 +1134,8 @@ def test_viewer_js_uses_adaptive_topic_breathing_layout_contract(tmp_path: Path)
     synthetic_body = js.split("function renderSyntheticTreeNodes", 1)[1].split(
         "function shouldRenderSyntheticTreeLabel", 1
     )[0]
-    assert "var labelReservedBoxes = syntheticTreeLabelReservedBoxes(bounds)" in synthetic_body
+    assert "var labelReservedBoxes = null" in synthetic_body
+    assert "if (!labelReservedBoxes) labelReservedBoxes = syntheticTreeLabelReservedBoxes(bounds)" in synthetic_body
     assert "var labelPoint = syntheticTreeLabelPoint(node, p, r)" in synthetic_body
     assert "var labelBox = syntheticTreeLabelBox(node, p, r)" in synthetic_body
     assert "syntheticTreeLabelCanRender(node, labelBox, labelReservedBoxes)" in synthetic_body
@@ -2147,6 +2285,41 @@ def test_publish_public_bundle_creates_folder(tmp_path: Path) -> None:
     assert (publish_path / "assets" / "viewer.css").exists()
     assert (publish_path / "assets" / "viewer.js").exists()
     assert (publish_path / "assets" / "sfx.js").exists()
+
+
+def test_publish_public_bundle_merges_site_specific_tutorial_config(tmp_path: Path) -> None:
+    """Published site bundles should carry opt-in onboarding copy."""
+    _write_minimal_graph_for_admin(tmp_path)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "viewer-tutorial.json").write_text(
+        json.dumps(
+            {
+                "tutorialSteps": [
+                    {
+                        "target": "screen",
+                        "title": "What is this?",
+                        "body": [
+                            "Site-specific public intro.",
+                            {
+                                "before": "It was made with ",
+                                "linkText": "Traccia",
+                                "href": "https://github.com/Microck/traccia",
+                                "after": ". You can build your own skill tree too!",
+                            },
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+
+    publish_public_bundle(tmp_path)
+
+    config = json.loads((tmp_path / "exports" / "viewer-public" / "config.json").read_text())
+    assert config["mode"] == "public"
+    assert config["tutorialSteps"][0]["body"][0] == "Site-specific public intro."
+    assert config["tutorialSteps"][0]["body"][1]["linkText"] == "Traccia"
 
 
 def test_publish_public_bundle_excludes_hidden_and_disputed(tmp_path: Path) -> None:
