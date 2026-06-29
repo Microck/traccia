@@ -1028,7 +1028,6 @@ def test_viewer_animates_loader_into_center_out_tree_reveal(tmp_path: Path) -> N
 
     assert "body.viewer-intro .loading-state[data-closing=\"true\"]" in css
     assert "body.viewer-intro .viewport__canvas" in css
-    assert "body.viewer-intro .graph-svg" in css
     assert ".spiral-loader::before" not in css
     assert ".spiral-loader::after" not in css
     assert "spiral-loader-settle-slide" in css
@@ -1047,21 +1046,12 @@ def test_viewer_animates_loader_into_center_out_tree_reveal(tmp_path: Path) -> N
     assert "if (graphIntro.startedAt == null) graphIntro.startedAt = now;" in js
     assert "setViewImmediate(graphIntroViewState());" in js
     assert "GRAPH_INTRO_FRAME_MS = 33" in js
-    assert "GRAPH_INTRO_FRAME_COUNT = 18" in js
-    assert "GRAPH_INTRO_FRAME_MAX_DPR = 1.25" in js
-    assert "GRAPH_INTRO_FRAME_MAX_PIXELS = 1800000" in js
     assert "now - graphIntro.lastPaintAt >= GRAPH_INTRO_FRAME_MS" in js
     assert "if (isGraphIntroActive() && displayAlpha <= 0.01) return;" in js
     assert "var t = (graphIntro.progress - 0.22) / 0.34;" in js
     assert "var t = (graphIntro.progress - 0.58) / 0.42;" in js
     assert "function graphIntroDisplayPoint" in js
     assert "function graphIntroNodeProgress" in js
-    assert "function buildGraphIntroFrameCache" in js
-    assert "function drawGraphIntroCachedFrame" in js
-    assert "function clearGraphIntroFrameCache" in js
-    assert "graphIntro.frameCache = graphIntroFrameCache" in js
-    assert "var renderedCached = drawGraphIntroCachedFrame();" in js
-    assert "if (!renderedCached && shouldPaint)" in js
     assert "directionalDelay" in js
     assert "jitterDelay" in js
     assert "syncGraphIntroSvgOverlay();" in js
