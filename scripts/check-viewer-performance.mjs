@@ -25,6 +25,7 @@ const maxCanvasCoverageMissFrames = Number(
 const maxInputMicrotaskMs = Number(process.env.TRACCIA_PERF_MAX_INPUT_MICROTASK_MS || 50);
 const maxInputRafP95Ms = Number(process.env.TRACCIA_PERF_MAX_INPUT_RAF_P95_MS || 120);
 const maxInputRafMs = Number(process.env.TRACCIA_PERF_MAX_INPUT_RAF_MS || 220);
+const maxGraphAnchorDriftPx = Number(process.env.TRACCIA_PERF_MAX_GRAPH_ANCHOR_DRIFT_PX || 0.35);
 const failGlobalFrameBudgets = process.env.TRACCIA_PERF_FAIL_GLOBAL_FRAME_BUDGETS === "1";
 
 function percentile(values, p) {
@@ -494,6 +495,176 @@ const zoomProbeBox = await page.locator("#canvas").boundingBox();
 if (!zoomProbeBox) {
   throw new Error("Viewer canvas was not measurable for zoom probe.");
 }
+
+async function readGraphCursorProbe(cursorX, cursorY, graphAnchor = null) {
+  return page.evaluate(({ cursorX, cursorY, graphAnchor }) => {
+    const viewport = document.querySelector("#canvas");
+    const graphZoom = document.querySelector("#graph-zoom");
+    const graphCamera = document.querySelector("#graph-camera");
+    if (!viewport || !graphZoom) {
+      throw new Error("Viewer graph was not measurable for anchor probe.");
+    }
+    const viewportRect = viewport.getBoundingClientRect();
+    function parseGraphZoomTransform(transform) {
+      const match = String(transform || "").match(
+        /translate\(\s*(-?[0-9.eE]+)\s*,\s*(-?[0-9.eE]+)\s*\)\s*scale\(\s*(-?[0-9.eE]+)\s*\)/,
+      );
+      if (!match) return { x: 0, y: 0, scale: 1 };
+      return {
+        x: Number.parseFloat(match[1]) || 0,
+        y: Number.parseFloat(match[2]) || 0,
+        scale: Number.parseFloat(match[3]) || 1,
+      };
+    }
+    function parseNodeTransform(transform) {
+      const match = String(transform || "").match(
+        /translate\(\s*(-?[0-9.eE]+)\s*,\s*(-?[0-9.eE]+)\s*\)\s*scale\(\s*(-?[0-9.eE]+)\s*\)/,
+      );
+      if (!match) return null;
+      return {
+        x: Number.parseFloat(match[1]),
+        y: Number.parseFloat(match[2]),
+      };
+    }
+    function parseOrigin(origin) {
+      const parts = String(origin || "0px 0px").split(/\s+/);
+      return {
+        x: Number.parseFloat(parts[0]) || 0,
+        y: Number.parseFloat(parts[1] || parts[0]) || 0,
+      };
+    }
+    function matrixFor(transform) {
+      if (!transform || transform === "none") return new DOMMatrix();
+      return new DOMMatrix(transform);
+    }
+    function projectThroughCamera(point) {
+      if (!graphCamera) return { x: viewportRect.left + point.x, y: viewportRect.top + point.y };
+      const style = getComputedStyle(graphCamera);
+      const origin = parseOrigin(style.transformOrigin);
+      const matrix = matrixFor(style.transform);
+      const localX = point.x - origin.x;
+      const localY = point.y - origin.y;
+      return {
+        x: viewportRect.left + origin.x + matrix.a * localX + matrix.c * localY + matrix.e,
+        y: viewportRect.top + origin.y + matrix.b * localX + matrix.d * localY + matrix.f,
+      };
+    }
+    function unprojectThroughCamera(screenX, screenY) {
+      const point = {
+        x: screenX - viewportRect.left,
+        y: screenY - viewportRect.top,
+      };
+      if (!graphCamera) return point;
+      const style = getComputedStyle(graphCamera);
+      const origin = parseOrigin(style.transformOrigin);
+      const matrix = matrixFor(style.transform).inverse();
+      const localX = point.x - origin.x;
+      const localY = point.y - origin.y;
+      return {
+        x: origin.x + matrix.a * localX + matrix.c * localY + matrix.e,
+        y: origin.y + matrix.b * localX + matrix.d * localY + matrix.f,
+      };
+    }
+    function screenForGraphPoint(graphX, graphY) {
+      const view = parseGraphZoomTransform(graphZoom.getAttribute("transform"));
+      return projectThroughCamera({
+        x: view.x + graphX * view.scale,
+        y: view.y + graphY * view.scale,
+      });
+    }
+    function graphPointForScreen(screenX, screenY) {
+      const view = parseGraphZoomTransform(graphZoom.getAttribute("transform"));
+      const local = unprojectThroughCamera(screenX, screenY);
+      return {
+        graphX: (local.x - view.x) / view.scale,
+        graphY: (local.y - view.y) / view.scale,
+      };
+    }
+    function visibleNodeRecords() {
+      return Array.from(document.querySelectorAll(".graph-node[data-id]"))
+        .map((node) => {
+          const point = parseNodeTransform(node.getAttribute("transform"));
+          if (!point) return null;
+          const screen = screenForGraphPoint(point.x, point.y);
+          return {
+            id: node.getAttribute("data-id"),
+            graphX: point.x,
+            graphY: point.y,
+            screenX: screen.x,
+            screenY: screen.y,
+            distanceFromCenter: Math.hypot(
+              screen.x - (viewportRect.left + viewportRect.width * 0.5),
+              screen.y - (viewportRect.top + viewportRect.height * 0.5),
+            ),
+          };
+        })
+        .filter((record) =>
+          record &&
+          Number.isFinite(record.screenX) &&
+          Number.isFinite(record.screenY) &&
+          record.screenX >= viewportRect.left + 24 &&
+          record.screenX <= viewportRect.right - 24 &&
+          record.screenY >= viewportRect.top + 24 &&
+          record.screenY <= viewportRect.bottom - 24
+        )
+        .sort((a, b) => a.distanceFromCenter - b.distanceFromCenter);
+    }
+    if (graphAnchor) {
+      const screen = screenForGraphPoint(graphAnchor.graphX, graphAnchor.graphY);
+      return {
+        anchorId: graphAnchor.anchorId,
+        cursorX,
+        cursorY,
+        graphX: graphAnchor.graphX,
+        graphY: graphAnchor.graphY,
+        screenX: screen.x,
+        screenY: screen.y,
+      };
+    }
+    const [record] = visibleNodeRecords();
+    if (!record) throw new Error("No visible SVG anchor node was available for zoom drift probe.");
+    const graphPoint = graphPointForScreen(cursorX, cursorY);
+    return {
+      anchorId: record.id,
+      cursorX,
+      cursorY,
+      graphX: graphPoint.graphX,
+      graphY: graphPoint.graphY,
+      screenX: cursorX,
+      screenY: cursorY,
+      nearestNodeScreenX: record.screenX,
+      nearestNodeScreenY: record.screenY,
+    };
+  }, { cursorX, cursorY, graphAnchor });
+}
+
+const anchorNodeProbe = await readGraphCursorProbe(
+  Math.round(zoomProbeBox.x + zoomProbeBox.width * 0.5),
+  Math.round(zoomProbeBox.y + zoomProbeBox.height * 0.5),
+);
+const anchorCursorX = Math.round(anchorNodeProbe.nearestNodeScreenX);
+const anchorCursorY = Math.round(anchorNodeProbe.nearestNodeScreenY);
+const anchorProbeBefore = await readGraphCursorProbe(anchorCursorX, anchorCursorY);
+await page.mouse.move(anchorCursorX, anchorCursorY);
+for (let tick = 0; tick < 6; tick += 1) {
+  await page.mouse.wheel(0, -120);
+}
+const anchorProbeImmediate = await readGraphCursorProbe(anchorCursorX, anchorCursorY, anchorProbeBefore);
+await page.waitForTimeout(360);
+const anchorProbeSettled = await readGraphCursorProbe(anchorCursorX, anchorCursorY, anchorProbeBefore);
+const graphAnchorImmediateDriftPx = Math.hypot(
+  anchorProbeImmediate.screenX - anchorCursorX,
+  anchorProbeImmediate.screenY - anchorCursorY,
+);
+const graphAnchorSettledDriftPx = Math.hypot(
+  anchorProbeSettled.screenX - anchorCursorX,
+  anchorProbeSettled.screenY - anchorCursorY,
+);
+for (let tick = 0; tick < 6; tick += 1) {
+  await page.mouse.wheel(0, 120);
+}
+await page.waitForTimeout(360);
+
 const zoomCameraBefore = await cameraState();
 const zoomPixelsBefore = await page.locator("#canvas").screenshot();
 await page.mouse.move(
@@ -865,6 +1036,16 @@ const result = {
   chunkProbe: measurement.chunkProbe,
   inputProbe: inputProbeSummary,
   viewerMetrics: measurement.viewerMetrics,
+  graphAnchorProbe: {
+    anchorId: anchorProbeBefore.anchorId,
+    cursorX: anchorCursorX,
+    cursorY: anchorCursorY,
+    immediateDriftPx: Number(graphAnchorImmediateDriftPx.toFixed(3)),
+    settledDriftPx: Number(graphAnchorSettledDriftPx.toFixed(3)),
+    before: anchorProbeBefore,
+    immediate: anchorProbeImmediate,
+    settled: anchorProbeSettled,
+  },
   consoleErrors,
   observerErrors: measurement.errors,
   budgets: {
@@ -875,6 +1056,7 @@ const result = {
     maxInputMicrotaskMs,
     maxInputRafP95Ms,
     maxInputRafMs,
+    maxGraphAnchorDriftPx,
     failGlobalFrameBudgets,
   },
 };
@@ -888,6 +1070,18 @@ if (svgNodeBodyCount !== 0) {
 }
 if (!cameraChanged(zoomCameraBefore, zoomCameraImmediate)) {
   failures.push("SVG graph camera did not update immediately after wheel input");
+}
+if (graphAnchorImmediateDriftPx > maxGraphAnchorDriftPx) {
+  failures.push(
+    `graph anchor drifted ${graphAnchorImmediateDriftPx.toFixed(3)}px during repeated wheel zoom ` +
+      `(max ${maxGraphAnchorDriftPx}px)`,
+  );
+}
+if (graphAnchorSettledDriftPx > maxGraphAnchorDriftPx) {
+  failures.push(
+    `graph anchor settled ${graphAnchorSettledDriftPx.toFixed(3)}px from its pre-zoom position ` +
+      `(max ${maxGraphAnchorDriftPx}px)`,
+  );
 }
 if (!zoomCameraImmediate.svgCanvasAligned) {
   failures.push(

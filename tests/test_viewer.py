@@ -417,7 +417,7 @@ def test_export_viewer_html_references_assets_and_data(tmp_path: Path) -> None:
     assert "assets/viewer.js?v=" in html
     assert "assets/sfx.js?v=" in html
     assert "graph.json?v=" in html
-    assert "20260629-camera-freeze-1" in html
+    assert "20260629-anchor-lock-1" in html
     assert "graph.json" in html
     assert "config.json" in html or "config.json" not in html  # config is fetched dynamically
 
@@ -677,7 +677,7 @@ def test_export_viewer_installs_motion_transition_hooks(tmp_path: Path) -> None:
     assert "prefers-reduced-motion: reduce" in css
     assert ".t-panel-slide" in css
 
-    assert 'const DATA_VERSION = "20260629-camera-freeze-1"' in js
+    assert 'const DATA_VERSION = "20260629-anchor-lock-1"' in js
     assert "function setPanelOpen" in js
     assert "function setDetailSurfaceOpen" in js
     assert 'swap.dataset.state = on ? "on" : "off"' in js
@@ -714,7 +714,7 @@ def test_export_viewer_applies_lightweight_default_filters(tmp_path: Path) -> No
     html = (export_root / "index.html").read_text()
     js = (export_root / "assets" / "viewer.js").read_text()
 
-    assert "20260629-camera-freeze-1" in html
+    assert "20260629-anchor-lock-1" in html
     assert '<label class="filterbar__label" for="filter-domain">Area</label>' in html
     assert '<option value="">All areas</option>' in html
     assert "<h3 class=\"legend__heading\">Skill areas</h3>" in html
@@ -1229,13 +1229,19 @@ def test_viewer_js_animates_selection_and_guards_drag_clicks(tmp_path: Path) -> 
     assert "return bestId || fallbackId" in graph_node_body
     assert "var clientPoint = wheelClientPoint(e)" in js
     assert "var anchor = zoomAnchorForWheelEvent(clientPoint.x, clientPoint.y, mx, my)" in js
-    assert "zoomAt(anchor.x, anchor.y, e)" in js
+    assert "zoomAt(anchor, e)" in js
+    zoom_body = js.split("function zoomAt", 1)[1].split("function wheelClientPoint", 1)[0]
+    assert "viewForGraphPointAtScreen(" in zoom_body
+    assert "anchor.screenX" in zoom_body
+    assert "anchor.screenY" in zoom_body
+    assert "anchor.graphX" in zoom_body
+    assert "anchor.graphY" in zoom_body
     wheel_anchor_body = js.split("function zoomAnchorForWheelEvent", 1)[1].split(
         "function graphPointForWheelAnchor", 1
     )[0]
-    assert "return { x: wheelZoomAnchor.screenX, y: wheelZoomAnchor.screenY }" in wheel_anchor_body
-    assert "screenX: screenPoint.x" in wheel_anchor_body
-    assert "screenY: screenPoint.y" in wheel_anchor_body
+    assert "return wheelZoomAnchor" in wheel_anchor_body
+    assert "screenX: fallbackX" in wheel_anchor_body
+    assert "screenY: fallbackY" in wheel_anchor_body
     graph_anchor_body = js.split("function graphPointForWheelAnchor", 1)[1].split(
         "function screenPointForGraphPoint", 1
     )[0]
@@ -2629,11 +2635,16 @@ def test_viewer_js_uses_retained_canvas_bitmap_cache(tmp_path: Path) -> None:
     )[0]
     assert "isCameraAnimating()" in settled_body
     assert "scheduleSettledCanvasRedraw(Math.max(80" in settled_body
-    zoom_body = js.split("function zoomAt(cx, cy, event)", 1)[1].split(
-        "function zoomToScale", 1
+    zoom_body = js.split("function zoomAt(anchor, event)", 1)[1].split(
+        "function wheelClientPoint", 1
     )[0]
     assert "var base = cloneViewState(viewState)" in zoom_body
     assert "var base = targetViewState" not in zoom_body
+    assert "viewForGraphPointAtScreen(" in zoom_body
+    assert "anchor.screenX" in zoom_body
+    assert "anchor.screenY" in zoom_body
+    assert "anchor.graphX" in zoom_body
+    assert "anchor.graphY" in zoom_body
     client_body = js.split("function wheelClientPoint", 1)[1].split(
         "function zoomAnchorForWheelEvent", 1
     )[0]
@@ -2642,9 +2653,9 @@ def test_viewer_js_uses_retained_canvas_bitmap_cache(tmp_path: Path) -> None:
         "function graphPointForWheelAnchor", 1
     )[0]
     assert "wheelCameraActive && wheelZoomAnchor" in anchor_body
-    assert "return { x: wheelZoomAnchor.screenX, y: wheelZoomAnchor.screenY }" in anchor_body
-    assert "screenX: screenPoint.x" in anchor_body
-    assert "screenY: screenPoint.y" in anchor_body
+    assert "return wheelZoomAnchor" in anchor_body
+    assert "screenX: fallbackX" in anchor_body
+    assert "screenY: fallbackY" in anchor_body
     graph_anchor_body = js.split("function graphPointForWheelAnchor", 1)[1].split(
         "function screenPointForGraphPoint", 1
     )[0]

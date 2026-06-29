@@ -16,8 +16,8 @@ VIEWER_HTML = """\
 <meta name="color-scheme" content="dark light">
 <title>Skill Map</title>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-<link rel="stylesheet" href="assets/viewer.css?v=20260629-camera-freeze-1">
-<link rel="preload" href="graph.json?v=20260629-camera-freeze-1" as="fetch" crossorigin>
+<link rel="stylesheet" href="assets/viewer.css?v=20260629-anchor-lock-1">
+<link rel="preload" href="graph.json?v=20260629-anchor-lock-1" as="fetch" crossorigin>
 </head>
 <body class="viewer-loading">
 
@@ -324,8 +324,8 @@ VIEWER_HTML = """\
   <div class="sheet__body" id="sheet-body"></div>
 </aside>
 
-<script src="assets/sfx.js?v=20260629-camera-freeze-1" defer></script>
-<script src="assets/viewer.js?v=20260629-camera-freeze-1" defer></script>
+<script src="assets/sfx.js?v=20260629-anchor-lock-1" defer></script>
+<script src="assets/viewer.js?v=20260629-anchor-lock-1" defer></script>
 </body>
 </html>
 """
@@ -1022,19 +1022,15 @@ body {
   touch-action: none;
   z-index: 1;
   opacity: 1;
-  transform: scale(1);
-  transform-origin: center;
   filter: none;
   transition:
     opacity 460ms var(--motion-ease-out),
-    transform 460ms var(--motion-ease-out),
     filter 460ms var(--motion-ease-out);
-  will-change: opacity, transform, filter;
+  will-change: opacity, filter;
 }
 .viewport__canvas.panning { cursor: grabbing; }
 body.viewer-loading .viewport__canvas {
   opacity: 0;
-  transform: scale(0.985);
   filter: blur(8px);
 }
 body.viewer-loading .hud-actions {
@@ -2623,7 +2619,7 @@ VIEWER_JS = """\
 
   // --- SFX ---
   const sfx = new window.SfxEngine();
-  const DATA_VERSION = "20260629-camera-freeze-1";
+  const DATA_VERSION = "20260629-anchor-lock-1";
   const LOADING_EXIT_MS = 260;
   const DRAG_SELECT_THRESHOLD = 5;
 
@@ -7265,7 +7261,7 @@ VIEWER_JS = """\
       var mx = clientPoint.x - rect.left;
       var my = clientPoint.y - rect.top;
       var anchor = zoomAnchorForWheelEvent(clientPoint.x, clientPoint.y, mx, my);
-      zoomAt(anchor.x, anchor.y, e);
+      zoomAt(anchor, e);
     }, { passive: false });
 
     // Touch pan/pinch
@@ -7338,7 +7334,7 @@ VIEWER_JS = """\
     });
   }
 
-  function zoomAt(cx, cy, event) {
+  function zoomAt(anchor, event) {
     stopViewTween();
     stopPanInertia();
     var pixels = normalizedWheelPixels(event);
@@ -7346,11 +7342,20 @@ VIEWER_JS = """\
     if (event.shiftKey) pixels = pixels / 4;
     var rate = Math.abs(pixels) < 16 || event.ctrlKey ? WHEEL_ZOOM.trackpadRate : WHEEL_ZOOM.mouseRate;
     var scaleFactor = Math.pow(2, -pixels * rate);
-    // Anchor wheel zoom from the camera that is actually visible right now.
-    // targetViewState can be a subpixel-stale intent from a prior tween/settle
-    // path; using it here compounds that tiny error on every wheel tick.
     var base = cloneViewState(viewState);
-    var target = zoomTargetForScale(cx, cy, base.scale * scaleFactor, base);
+    var nextScale = base.scale * scaleFactor;
+    // Wheel zoom has one invariant: the graph coordinate under the cursor at
+    // the start of the wheel burst stays under the same screen coordinate.
+    // Re-deriving x/y from the prior screen transform is mathematically close,
+    // but browser event coalescing and active compositor state make the graph
+    // drift by visible subpixels over repeated wheel ticks.
+    var target = viewForGraphPointAtScreen(
+      anchor.screenX,
+      anchor.screenY,
+      anchor.graphX,
+      anchor.graphY,
+      nextScale
+    );
 
     targetViewState = cloneViewState(target);
     holdWheelCameraActive(VIEW.cameraZoomCanvasSettleMs);
@@ -7371,18 +7376,21 @@ VIEWER_JS = """\
 
   function zoomAnchorForWheelEvent(clientX, clientY, fallbackX, fallbackY) {
     if (wheelCameraActive && wheelZoomAnchor) {
-      return { x: wheelZoomAnchor.screenX, y: wheelZoomAnchor.screenY };
+      return wheelZoomAnchor;
     }
     var graphPoint = graphPointForWheelAnchor(clientX, clientY, fallbackX, fallbackY);
-    var screenPoint = screenPointForGraphPoint(graphPoint.graphX, graphPoint.graphY);
     wheelZoomAnchor = {
       graphX: graphPoint.graphX,
       graphY: graphPoint.graphY,
       nodeId: graphPoint.nodeId,
-      screenX: screenPoint.x,
-      screenY: screenPoint.y,
+      // Store the raw viewport-local cursor point for the whole burst. This is
+      // the user's visual anchor; projecting the graph point back through the
+      // current DOM matrix can reintroduce the stale-transform drift this code
+      // is specifically trying to avoid.
+      screenX: fallbackX,
+      screenY: fallbackY,
     };
-    return screenPoint;
+    return wheelZoomAnchor;
   }
 
   function graphPointForWheelAnchor(clientX, clientY, fallbackX, fallbackY) {
@@ -8489,14 +8497,13 @@ body { display: flex; flex-direction: column; }
 }
 .viewport__canvas {
   position: absolute; inset: 0; cursor: grab; touch-action: none;
-  opacity: 1; transform: scale(1); transform-origin: center; filter: none;
+  opacity: 1; filter: none;
   transition: opacity 420ms cubic-bezier(0.23, 1, 0.32, 1),
-    transform 420ms cubic-bezier(0.23, 1, 0.32, 1),
     filter 420ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 .viewport__canvas.panning { cursor: grabbing; }
 body.viewer-loading .viewport__canvas {
-  opacity: 0; transform: scale(0.985); filter: blur(8px);
+  opacity: 0; filter: blur(8px);
 }
 .graph-svg { width: 100%; height: 100%; display: block; }
 #graph-zoom { transition: opacity 0.2s; }
