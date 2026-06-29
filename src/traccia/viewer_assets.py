@@ -16,8 +16,8 @@ VIEWER_HTML = """\
 <meta name="color-scheme" content="dark light">
 <title>Skill Map</title>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
-<link rel="stylesheet" href="assets/viewer.css?v=20260624-focus-field-1">
-<link rel="preload" href="graph.json?v=20260624-focus-field-1" as="fetch" crossorigin>
+<link rel="stylesheet" href="assets/viewer.css?v=20260629-camera-freeze-1">
+<link rel="preload" href="graph.json?v=20260629-camera-freeze-1" as="fetch" crossorigin>
 </head>
 <body class="viewer-loading">
 
@@ -324,8 +324,8 @@ VIEWER_HTML = """\
   <div class="sheet__body" id="sheet-body"></div>
 </aside>
 
-<script src="assets/sfx.js?v=20260624-focus-field-1" defer></script>
-<script src="assets/viewer.js?v=20260624-focus-field-1" defer></script>
+<script src="assets/sfx.js?v=20260629-camera-freeze-1" defer></script>
+<script src="assets/viewer.js?v=20260629-camera-freeze-1" defer></script>
 </body>
 </html>
 """
@@ -2623,7 +2623,7 @@ VIEWER_JS = """\
 
   // --- SFX ---
   const sfx = new window.SfxEngine();
-  const DATA_VERSION = "20260624-focus-field-1";
+  const DATA_VERSION = "20260629-camera-freeze-1";
   const LOADING_EXIT_MS = 260;
   const DRAG_SELECT_THRESHOLD = 5;
 

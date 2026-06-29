@@ -417,6 +417,7 @@ def test_export_viewer_html_references_assets_and_data(tmp_path: Path) -> None:
     assert "assets/viewer.js?v=" in html
     assert "assets/sfx.js?v=" in html
     assert "graph.json?v=" in html
+    assert "20260629-camera-freeze-1" in html
     assert "graph.json" in html
     assert "config.json" in html or "config.json" not in html  # config is fetched dynamically
 
@@ -676,7 +677,7 @@ def test_export_viewer_installs_motion_transition_hooks(tmp_path: Path) -> None:
     assert "prefers-reduced-motion: reduce" in css
     assert ".t-panel-slide" in css
 
-    assert 'const DATA_VERSION = "20260624-focus-field-1"' in js
+    assert 'const DATA_VERSION = "20260629-camera-freeze-1"' in js
     assert "function setPanelOpen" in js
     assert "function setDetailSurfaceOpen" in js
     assert 'swap.dataset.state = on ? "on" : "off"' in js
@@ -713,7 +714,7 @@ def test_export_viewer_applies_lightweight_default_filters(tmp_path: Path) -> No
     html = (export_root / "index.html").read_text()
     js = (export_root / "assets" / "viewer.js").read_text()
 
-    assert "20260624-focus-field-1" in html
+    assert "20260629-camera-freeze-1" in html
     assert '<label class="filterbar__label" for="filter-domain">Area</label>' in html
     assert '<option value="">All areas</option>' in html
     assert "<h3 class=\"legend__heading\">Skill areas</h3>" in html
