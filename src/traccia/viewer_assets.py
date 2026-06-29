@@ -1056,6 +1056,10 @@ body.viewer-intro .viewport__canvas {
   pointer-events: none;
   cursor: default;
 }
+body.viewer-intro .graph-svg {
+  opacity: 0;
+  pointer-events: none;
+}
 body.viewer-loading .hud-actions {
   opacity: 0;
   transform: translateX(-50%) translateY(14px) scale(0.97);
@@ -2587,6 +2591,7 @@ VIEWER_JS = """\
   let resizeFitTimer = null;
   let graphIntro = null;
   let graphIntroFrame = null;
+  let graphIntroFrameCache = null;
   let tutorialState = null;
   let tutorialSteps = [];
   const panelHideTimers = new WeakMap();
@@ -2850,6 +2855,9 @@ VIEWER_JS = """\
   const GRAPH_INTRO_DURATION_MS = 2400;
   const GRAPH_INTRO_LOADER_MS = 420;
   const GRAPH_INTRO_FRAME_MS = 33;
+  const GRAPH_INTRO_FRAME_COUNT = 18;
+  const GRAPH_INTRO_FRAME_MAX_DPR = 1.25;
+  const GRAPH_INTRO_FRAME_MAX_PIXELS = 1800000;
   const DRAG_SELECT_THRESHOLD = 5;
   const TUTORIAL_STORAGE_KEY = "traccia.viewer.tutorial.dismissed.v1";
 
@@ -3115,6 +3123,7 @@ VIEWER_JS = """\
   function startGraphIntro() {
     if (!layoutCache || prefersReducedMotion()) {
       graphIntro = null;
+      clearGraphIntroFrameCache();
       document.body.classList.remove("viewer-intro");
       return;
     }
@@ -3122,6 +3131,12 @@ VIEWER_JS = """\
       cancelAnimationFrame(graphIntroFrame);
       graphIntroFrame = null;
     }
+    if (viewFrame) {
+      cancelAnimationFrame(viewFrame);
+      viewFrame = null;
+    }
+    canvasRedrawPending = false;
+    clearGraphIntroFrameCache();
     graphIntro = {
       active: true,
       startedAt: null,
@@ -3134,6 +3149,16 @@ VIEWER_JS = """\
     document.body.classList.add("viewer-intro");
     setViewImmediate(graphIntro.startView);
     renderGraph();
+    if (viewFrame) {
+      cancelAnimationFrame(viewFrame);
+      viewFrame = null;
+    }
+    canvasRedrawPending = false;
+    graphIntroFrameCache = buildGraphIntroFrameCache();
+    graphIntro.frameCache = graphIntroFrameCache;
+    graphIntro.progress = 0;
+    setViewImmediate(graphIntro.startView);
+    if (!drawGraphIntroCachedFrame()) renderCanvas();
 
     function step(now) {
       if (!graphIntro || !graphIntro.active) return;
@@ -3141,10 +3166,11 @@ VIEWER_JS = """\
       var raw = (now - graphIntro.startedAt) / graphIntro.duration;
       graphIntro.progress = Math.max(0, Math.min(1, raw));
       setViewImmediate(graphIntroViewState());
+      var renderedCached = drawGraphIntroCachedFrame();
       var shouldPaint = graphIntro.lastPaintAt == null ||
         now - graphIntro.lastPaintAt >= GRAPH_INTRO_FRAME_MS ||
         graphIntro.progress >= 1;
-      if (shouldPaint) {
+      if (!renderedCached && shouldPaint) {
         graphIntro.lastPaintAt = now;
         renderCanvas();
         applyFocusDisplayToSvg();
@@ -3158,6 +3184,7 @@ VIEWER_JS = """\
       }
       graphIntroFrame = null;
       setViewImmediate(graphIntro.endView);
+      clearGraphIntroFrameCache();
       graphIntro = null;
       document.body.classList.remove("viewer-intro");
       renderGraph();
@@ -3165,6 +3192,88 @@ VIEWER_JS = """\
     }
 
     graphIntroFrame = requestAnimationFrame(step);
+  }
+
+  function buildGraphIntroFrameCache() {
+    if (!graphIntro || !canvasCtx || !dom.graph_canvas) return null;
+    var frameSize = graphIntroFrameSize();
+    if (!frameSize) return null;
+    var savedViewState = cloneViewState(viewState);
+    var savedProgress = graphIntro.progress;
+    var frames = [];
+    try {
+      for (var i = 0; i < GRAPH_INTRO_FRAME_COUNT; i += 1) {
+        var progress = i / Math.max(1, GRAPH_INTRO_FRAME_COUNT - 1);
+        graphIntro.progress = progress;
+        setViewImmediate(graphIntroViewState());
+        renderCanvas();
+        var frame = document.createElement("canvas");
+        frame.width = frameSize.width;
+        frame.height = frameSize.height;
+        var frameCtx = frame.getContext("2d");
+        if (!frameCtx) {
+          frames = [];
+          break;
+        }
+        frameCtx.drawImage(
+          dom.graph_canvas,
+          0, 0, dom.graph_canvas.width, dom.graph_canvas.height,
+          0, 0, frame.width, frame.height
+        );
+        frames.push(frame);
+      }
+    } catch (err) {
+      frames = [];
+    }
+    graphIntro.progress = savedProgress;
+    setViewImmediate(savedViewState);
+    if (!frames.length) return null;
+    return { frames: frames, width: frameSize.width, height: frameSize.height };
+  }
+
+  function graphIntroFrameSize() {
+    if (!dom.graph_canvas) return null;
+    var width = dom.graph_canvas.width || 0;
+    var height = dom.graph_canvas.height || 0;
+    if (!width || !height) return null;
+    // The intro is first-run polish, not the interactive renderer. Cap its
+    // cached frame resolution so low-end phones get smooth playback without
+    // holding a full-DPR copy of the viewport for every frame.
+    var scale = Math.min(1, GRAPH_INTRO_FRAME_MAX_DPR / Math.max(1, canvasDpr));
+    var targetPixels = width * height * scale * scale;
+    if (targetPixels > GRAPH_INTRO_FRAME_MAX_PIXELS) {
+      scale *= Math.sqrt(GRAPH_INTRO_FRAME_MAX_PIXELS / targetPixels);
+    }
+    scale = Math.max(0.45, Math.min(1, scale));
+    return {
+      width: Math.max(1, Math.round(width * scale)),
+      height: Math.max(1, Math.round(height * scale)),
+    };
+  }
+
+  function drawGraphIntroCachedFrame() {
+    var cache = graphIntro && graphIntro.frameCache;
+    if (!cache || !cache.frames || !cache.frames.length || !canvasCtx || !dom.graph_canvas) {
+      return false;
+    }
+    var index = Math.max(
+      0,
+      Math.min(cache.frames.length - 1, Math.round(graphIntro.progress * (cache.frames.length - 1)))
+    );
+    var frame = cache.frames[index];
+    if (!frame) return false;
+    canvasCtx.setTransform(1, 0, 0, 1, 0, 0);
+    canvasCtx.clearRect(0, 0, dom.graph_canvas.width, dom.graph_canvas.height);
+    canvasCtx.drawImage(frame, 0, 0, dom.graph_canvas.width, dom.graph_canvas.height);
+    resetVisibleCanvasTransform();
+    return true;
+  }
+
+  function clearGraphIntroFrameCache() {
+    if (!graphIntroFrameCache) return;
+    graphIntroFrameCache.frames = [];
+    graphIntroFrameCache = null;
+    if (graphIntro) graphIntro.frameCache = null;
   }
 
   function graphIntroRootViewState() {
@@ -3310,6 +3419,7 @@ VIEWER_JS = """\
 
   function resizeCanvas() {
     if (!dom.graph_canvas || !canvasCtx) return;
+    clearGraphIntroFrameCache();
     var rect = dom.canvas.getBoundingClientRect();
     canvasDpr = Math.min(window.devicePixelRatio || 1, VIEW.canvasMaxDpr);
     canvasCachePad = canvasCachePadForRect(rect);
