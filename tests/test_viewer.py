@@ -1035,12 +1035,15 @@ def test_viewer_animates_loader_into_center_out_tree_reveal(tmp_path: Path) -> N
     assert "function startGraphIntro" in js
     assert "function graphIntroRootViewState" in js
     assert "function graphIntroViewState" in js
-    assert "function graphIntroZoomProgress" in js
-    assert "function graphIntroRevealProgress" in js
+    assert "function graphIntroLayerViewState" in js
+    assert "function graphIntroDepthBounds" in js
+    assert "function graphIntroFirstZoomProgress" in js
+    assert "function graphIntroSecondZoomProgress" in js
     assert "function blockGraphIntroInput" in js
     assert "startedAt: null" in js
     assert "lastPaintAt: null" in js
     assert "startView: graphIntroRootViewState()" in js
+    assert "layerView: graphIntroLayerViewState(1)" in js
     assert "endView: cloneViewState(viewState)" in js
     assert "setViewImmediate(graphIntro.startView);" in js
     assert "if (graphIntro.startedAt == null) graphIntro.startedAt = now;" in js
@@ -1048,10 +1051,17 @@ def test_viewer_animates_loader_into_center_out_tree_reveal(tmp_path: Path) -> N
     assert "GRAPH_INTRO_FRAME_MS = 33" in js
     assert "now - graphIntro.lastPaintAt >= GRAPH_INTRO_FRAME_MS" in js
     assert "if (isGraphIntroActive() && displayAlpha <= 0.01) return;" in js
-    assert "var t = (graphIntro.progress - 0.22) / 0.34;" in js
-    assert "var t = (graphIntro.progress - 0.58) / 0.42;" in js
+    assert "var t = (graphIntro.progress - 0.12) / 0.2;" in js
+    assert "var t = (graphIntro.progress - 0.52) / 0.22;" in js
+    assert "start = 0.34 + directionalDelay * 0.08 + jitterDelay * 0.035;" in js
+    assert "start = 0.64 + Math.max(0, depth - 2) * 0.025 +" in js
+    assert "span = depth === 2 ? 0.24 : depth === 3 ? 0.21 : 0.18;" in js
     assert "function graphIntroDisplayPoint" in js
+    assert "function graphIntroSpawnPoint" in js
+    assert "var parentId = layoutCache.branchParents[id];" in js
+    assert "return graphIntroDisplayPoint(parentId, parentTarget, seen);" in js
     assert "function graphIntroNodeProgress" in js
+    assert "function easeOutCubic" in js
     assert "directionalDelay" in js
     assert "jitterDelay" in js
     assert "syncGraphIntroSvgOverlay();" in js

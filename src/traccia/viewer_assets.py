@@ -2847,7 +2847,7 @@ VIEWER_JS = """\
   const sfx = new window.SfxEngine();
   const DATA_VERSION = "20260629-tutorial-1";
   const LOADING_EXIT_MS = 260;
-  const GRAPH_INTRO_DURATION_MS = 2400;
+  const GRAPH_INTRO_DURATION_MS = 5200;
   const GRAPH_INTRO_LOADER_MS = 420;
   const GRAPH_INTRO_FRAME_MS = 33;
   const DRAG_SELECT_THRESHOLD = 5;
@@ -3129,6 +3129,7 @@ VIEWER_JS = """\
       progress: 0,
       duration: GRAPH_INTRO_DURATION_MS,
       startView: graphIntroRootViewState(),
+      layerView: graphIntroLayerViewState(1),
       endView: cloneViewState(viewState),
     };
     document.body.classList.add("viewer-intro");
@@ -3181,13 +3182,59 @@ VIEWER_JS = """\
     );
   }
 
+  function graphIntroLayerViewState(maxDepth) {
+    var rect = dom.canvas.getBoundingClientRect();
+    var bounds = graphIntroDepthBounds(maxDepth);
+    if (!bounds) return graphIntroRootViewState();
+    var pad = viewportFitPadding(rect);
+    var availableWidth = Math.max(1, rect.width - pad.x * 2);
+    var availableHeight = Math.max(1, rect.height - pad.y * 2);
+    var width = Math.max(1, bounds.maxX - bounds.minX);
+    var height = Math.max(1, bounds.maxY - bounds.minY);
+    var scale = Math.min(availableWidth / width, availableHeight / height, VIEW.maxScale);
+    scale = Math.max(VIEW.minScale, Math.min(VIEW.maxScale, scale * 0.88));
+    return {
+      x: (rect.width - (bounds.minX + bounds.maxX) * scale) / 2,
+      y: (rect.height - (bounds.minY + bounds.maxY) * scale) / 2,
+      scale: scale,
+    };
+  }
+
+  function graphIntroDepthBounds(maxDepth) {
+    if (!layoutCache || !layoutCache.positions) return null;
+    var bounds = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    (layoutCache.treeNodes || []).forEach(function (node) {
+      if (!node || graphIntroDepth(node.id) > maxDepth) return;
+      var point = layoutCache.positions[node.id];
+      if (!point) return;
+      var radius = node._synthetic ? treeNodeRadius(node) : nodeRadius(node);
+      var extent = radius + (node.kind === "tree-root" ? 42 : 70);
+      bounds.minX = Math.min(bounds.minX, point.x - extent);
+      bounds.maxX = Math.max(bounds.maxX, point.x + extent);
+      bounds.minY = Math.min(bounds.minY, point.y - extent);
+      bounds.maxY = Math.max(bounds.maxY, point.y + extent);
+    });
+    return isFinite(bounds.minX) ? bounds : null;
+  }
+
   function graphIntroViewState() {
     if (!graphIntro) return viewState;
-    var t = graphIntroZoomProgress();
+    var firstZoom = graphIntroFirstZoomProgress();
+    var secondZoom = graphIntroSecondZoomProgress();
+    var from = graphIntro.startView;
+    var mid = graphIntro.layerView || graphIntro.endView;
+    var x = lerp(from.x, mid.x, firstZoom);
+    var y = lerp(from.y, mid.y, firstZoom);
+    var scale = lerp(from.scale, mid.scale, firstZoom);
+    if (secondZoom > 0) {
+      x = lerp(mid.x, graphIntro.endView.x, secondZoom);
+      y = lerp(mid.y, graphIntro.endView.y, secondZoom);
+      scale = lerp(mid.scale, graphIntro.endView.scale, secondZoom);
+    }
     return {
-      x: lerp(graphIntro.startView.x, graphIntro.endView.x, t),
-      y: lerp(graphIntro.startView.y, graphIntro.endView.y, t),
-      scale: lerp(graphIntro.startView.scale, graphIntro.endView.scale, t),
+      x: x,
+      y: y,
+      scale: scale,
     };
   }
 
@@ -3210,20 +3257,20 @@ VIEWER_JS = """\
     return isGraphIntroActive() ? graphIntro.progress : 1;
   }
 
-  function graphIntroZoomProgress() {
+  function graphIntroFirstZoomProgress() {
     if (!isGraphIntroActive()) return 1;
-    var t = (graphIntro.progress - 0.22) / 0.34;
+    var t = (graphIntro.progress - 0.12) / 0.2;
     return easeInOut(Math.max(0, Math.min(1, t)));
   }
 
-  function graphIntroRevealProgress() {
+  function graphIntroSecondZoomProgress() {
     if (!isGraphIntroActive()) return 1;
-    var t = (graphIntro.progress - 0.58) / 0.42;
+    var t = (graphIntro.progress - 0.52) / 0.22;
     return easeInOut(Math.max(0, Math.min(1, t)));
   }
 
   function graphIntroLabelsVisible() {
-    return graphIntroRevealProgress() >= 0.78;
+    return !isGraphIntroActive() || graphIntro.progress >= 0.84;
   }
 
   function graphIntroDepth(id) {
@@ -3246,13 +3293,27 @@ VIEWER_JS = """\
     var depth = graphIntroDepth(id);
     var target = layoutCache && layoutCache.positions ? layoutCache.positions[id] : null;
     var angle = target && Number.isFinite(target.angle) ? target.angle : seededUnit(id, 83) * Math.PI * 2;
-    var directionalDelay = (angle + Math.PI) / (Math.PI * 2) * 0.16;
-    var jitterDelay = seededUnit(id, 89) * 0.08;
-    var delay = Math.min(0.55, depth * 0.08 + directionalDelay + jitterDelay);
-    var span = Math.max(0.22, 0.74 - delay * 0.35);
-    var revealProgress = graphIntroRevealProgress();
-    var t = (revealProgress - delay) / span;
-    return easeInOut(Math.max(0, Math.min(1, t)));
+    var directionalDelay = (angle + Math.PI) / (Math.PI * 2);
+    var jitterDelay = seededUnit(id, 89);
+    var start;
+    var span;
+
+    if (depth === 1) {
+      // First expansion: after the root camera move, reveal the main skill
+      // areas as a readable ring before the full graph appears.
+      start = 0.34 + directionalDelay * 0.08 + jitterDelay * 0.035;
+      span = 0.2;
+    } else {
+      // Final expansion: topics lead very slightly, then skill nodes waterfall
+      // around the ring. This keeps the 12k-node reveal legible without
+      // scheduling thousands of individual animations.
+      start = 0.64 + Math.max(0, depth - 2) * 0.025 +
+        directionalDelay * 0.075 + jitterDelay * 0.035;
+      span = depth === 2 ? 0.24 : depth === 3 ? 0.21 : 0.18;
+    }
+
+    var t = (graphIntro.progress - start) / span;
+    return easeOutCubic(Math.max(0, Math.min(1, t)));
   }
 
   function graphIntroOriginPoint() {
@@ -3260,16 +3321,38 @@ VIEWER_JS = """\
     return layoutCache.positions.__tree_root__ || { x: 0, y: 0, angle: -Math.PI / 2, radius: 0 };
   }
 
-  function graphIntroDisplayPoint(id, target) {
+  function graphIntroDisplayPoint(id, target, seen) {
     if (!isGraphIntroActive() || !target) return target;
-    var origin = graphIntroOriginPoint();
+    var pathSeen = seen || new Set();
+    if (id) pathSeen.add(id);
+    var origin = graphIntroSpawnPoint(id, pathSeen);
     var t = graphIntroNodeProgress(id);
     return {
       x: lerp(origin.x, target.x, t),
       y: lerp(origin.y, target.y, t),
       angle: Number.isFinite(target.angle) ? target.angle : Math.atan2(target.y / 0.92, target.x),
-      radius: lerp(0, Number.isFinite(target.radius) ? target.radius : Math.hypot(target.x, target.y / 0.92), t),
+      radius: lerp(
+        Number.isFinite(origin.radius) ? origin.radius : Math.hypot(origin.x, origin.y / 0.92),
+        Number.isFinite(target.radius) ? target.radius : Math.hypot(target.x, target.y / 0.92),
+        t
+      ),
     };
+  }
+
+  function graphIntroSpawnPoint(id, seen) {
+    var root = graphIntroOriginPoint();
+    if (!layoutCache || !layoutCache.positions || !layoutCache.branchParents || !id) return root;
+    var parentId = layoutCache.branchParents[id];
+    if (!parentId || parentId === id || seen.has(parentId)) return root;
+    var parentTarget = layoutCache.positions[parentId];
+    if (!parentTarget) return root;
+
+    // Each generation should deploy from the parent branch that revealed it,
+    // not from the root again. Using the parent's live intro point makes the
+    // final wave read as branches growing outward instead of particles flying
+    // from the center.
+    seen.add(parentId);
+    return graphIntroDisplayPoint(parentId, parentTarget, seen);
   }
 
   function graphIntroAlpha(id) {
@@ -7108,6 +7191,10 @@ VIEWER_JS = """\
 
   function easeInOut(t) {
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  }
+
+  function easeOutCubic(t) {
+    return 1 - Math.pow(1 - t, 3);
   }
 
   function applyViewTransform() {
