@@ -41,9 +41,9 @@ class Storage:
             self.db_path,
             timeout=SQLITE_CONNECT_TIMEOUT_SECONDS,
         )
-        self._configure_connection(connection)
         connection.row_factory = sqlite3.Row
         try:
+            self._configure_connection_with_retries(connection)
             self._ensure_schema_with_retries(connection)
             yield connection
             self._commit_with_retries(connection)
@@ -54,6 +54,16 @@ class Storage:
         connection.execute(f"pragma busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
         connection.execute("pragma journal_mode = WAL")
         connection.execute("pragma synchronous = NORMAL")
+
+    def _configure_connection_with_retries(self, connection: sqlite3.Connection) -> None:
+        for attempt_index in range(SQLITE_LOCK_RETRY_ATTEMPTS):
+            try:
+                self._configure_connection(connection)
+                return
+            except sqlite3.OperationalError as exc:
+                if not _is_sqlite_lock_error(exc) or attempt_index == SQLITE_LOCK_RETRY_ATTEMPTS - 1:
+                    raise
+                time.sleep(1.0 + attempt_index)
 
     def _ensure_schema_with_retries(self, connection: sqlite3.Connection) -> None:
         for attempt_index in range(SQLITE_LOCK_RETRY_ATTEMPTS):
