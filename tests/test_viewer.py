@@ -3189,6 +3189,41 @@ def test_viewer_js_canvas_click_does_hit_test(tmp_path: Path) -> None:
     assert 'e.target === dom.canvas || e.target === dom.graph_svg' not in click_body
 
 
+def test_viewer_js_detail_surface_clicks_clear_focus(tmp_path: Path) -> None:
+    """Detail chrome and close controls should exit the committed focus state."""
+    _write_minimal_graph(tmp_path)
+    export_viewer(tmp_path)
+    js = (tmp_path / "exports" / "viewer" / "assets" / "viewer.js").read_text()
+
+    surface_body = js.split("function handleDetailSurfaceBackgroundClick", 1)[1].split(
+        "function buildNodeDetail", 1
+    )[0]
+    assert "if (!selectedNodeId && !activeFocus) return;" in surface_body
+    assert "if (isDetailSurfaceContentClick(e)) return;" in surface_body
+    assert "deselectNode();" in surface_body
+
+    content_guard = js.split("function isDetailSurfaceContentClick", 1)[1].split(
+        "function handleDetailSurfaceBackgroundClick", 1
+    )[0]
+    assert '".selection-dock__close, .sheet__close"' in content_guard
+    assert '".selection-dock__header, .sheet__header"' in content_guard
+    assert '".selection-dock__body > *, .sheet__body > *"' in content_guard
+
+    bind_body = js.split("    // Drawer/sheet close", 1)[1].split(
+        "    // Keyboard navigation", 1
+    )[0]
+    assert 'dom.drawer_close.addEventListener("click", deselectNode);' in bind_body
+    assert 'dom.sheet_close.addEventListener("click", deselectNode);' in bind_body
+    assert (
+        'dom.drawer.addEventListener("click", handleDetailSurfaceBackgroundClick);'
+        in bind_body
+    )
+    assert (
+        'dom.sheet.addEventListener("click", handleDetailSurfaceBackgroundClick);'
+        in bind_body
+    )
+
+
 def test_viewer_css_maintains_black_graphite_palette(tmp_path: Path) -> None:
     """The redesign must keep a black/graphite base, no blue default."""
     _write_minimal_graph(tmp_path)

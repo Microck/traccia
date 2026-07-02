@@ -7482,6 +7482,24 @@ VIEWER_JS = """\
     sfx.drawerClose();
   }
 
+  function isDetailSurfaceContentClick(e) {
+    if (!e.target || !e.target.closest) return false;
+    if (e.target.closest(".selection-dock__close, .sheet__close")) return false;
+    if (e.target.closest(".selection-dock__header, .sheet__header")) return true;
+
+    // The detail body has no wrapper because its generated sections are
+    // streamed directly into both desktop and mobile surfaces. Treat clicks
+    // inside those first-level sections as content and empty body/chrome
+    // clicks as an outside dismissal.
+    return !!e.target.closest(".selection-dock__body > *, .sheet__body > *");
+  }
+
+  function handleDetailSurfaceBackgroundClick(e) {
+    if (!selectedNodeId && !activeFocus) return;
+    if (isDetailSurfaceContentClick(e)) return;
+    deselectNode();
+  }
+
   function buildNodeDetail(node) {
     var ps = node.provenanceSummary || {};
     var confidencePct = Math.round((node.confidence || 0) * 100);
@@ -8722,8 +8740,10 @@ VIEWER_JS = """\
     }
 
     // Drawer/sheet close
-    dom.drawer_close.addEventListener("click", closeDrawer);
-    dom.sheet_close.addEventListener("click", closeDrawer);
+    dom.drawer_close.addEventListener("click", deselectNode);
+    dom.sheet_close.addEventListener("click", deselectNode);
+    dom.drawer.addEventListener("click", handleDetailSurfaceBackgroundClick);
+    dom.sheet.addEventListener("click", handleDetailSurfaceBackgroundClick);
     dom.drawer_body.addEventListener("click", handleDetailNextClick);
     dom.sheet_body.addEventListener("click", handleDetailNextClick);
 
