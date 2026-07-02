@@ -68,7 +68,7 @@ It is a design handoff for execution, not an implementation spec.
     Desktop uses a HUD-aligned selection dock instead of a full-height drawer;
     mobile uses an expandable bottom sheet.
 34. Support domain collapse/expand in both public and admin viewers. Public collapse state is temporary per browser session; admin default collapse state can be saved into `curation.json`.
-35. Search should match skill names, aliases, domains, and descriptions in v1. Do not search raw provenance or evidence in the public viewer unless public-safe summaries are added later.
+35. Search should match skill names, domains, areas, and descriptions in v1. Do not search aliases, raw provenance, or evidence in the public viewer unless public-safe summaries are added later.
 36. Keep search always visible, and keep domain, status, freshness,
     confidence, and evidence type reachable through a compact collapsible HUD
     filter panel instead of a full-width filter bar.
