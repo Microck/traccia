@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img width="800" height="auto" alt="traccia exported skill map" src="https://github.com/user-attachments/assets/53d79097-98db-428a-8c6d-fe410abf5dff" />
+  <img width="800" height="auto" alt="traccia exported skill map animation" src=".github/assets/traccia-loop-squircle.gif" />
 </p>
 
 `traccia` turns personal archives into an evidence-backed skill graph.
