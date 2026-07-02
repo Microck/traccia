@@ -3,7 +3,8 @@
 This map covers the tracked repository files that define Traccia's behavior,
 packaging, tests, and documentation. Generated caches, local virtual
 environments, and temporary project outputs are not product surface. For the
-tracked file inventory with line counts, see [Repository inventory](repository-inventory.md).
+tracked repository surface and audit commands, see
+[Repository inventory](repository-inventory.md).
 
 ## Root Files
 
@@ -13,10 +14,16 @@ tracked file inventory with line counts, see [Repository inventory](repository-i
 | `pyproject.toml` | Python package metadata, dependencies, optional extras, console script, pytest, and Ruff config. |
 | `uv.lock` | Locked Python dependency graph for the `uv` workflow. |
 | `package.json` | npm package metadata for the thin `@microck/traccia` launcher. |
+| `AGENTS.md` | Harness-agnostic coding-agent instructions for this repository. |
+| `.env.example` | Blank local environment variable template. |
+| `CHANGELOG.md` | User-facing release notes. |
 | `LICENSE` | MIT license. |
+| `SECURITY.md` | Vulnerability reporting policy. |
+| `SUPPORT.md` | Support and reproduction guidance. |
+| `CODE_OF_CONDUCT.md` | Collaboration expectations. |
 | `CONTRIBUTING.md` | Contributor workflow notes. |
 | `CODEOWNERS` | Repository ownership. |
-| `CLAUDE.md` | Generated or maintained agent guidance for the project context. |
+| `CLAUDE.md` | Claude-specific agent guidance for the project context. |
 | `.python-version` | Local Python version pin. |
 | `.gitignore` | Local ignore rules. |
 
@@ -56,6 +63,7 @@ tracked file inventory with line counts, see [Repository inventory](repository-i
 | `src/traccia/assets/fonts/README.md` | Notes for bundled font assets. |
 | `src/traccia/assets/fonts/*.ttf` | Bundled display, UI, label, and mono font files. |
 | `.github/assets/traccia-logo.svg` | README and repository logo. |
+| `.github/assets/traccia-loop-squircle.gif` | README viewer animation. |
 
 ## npm Launcher
 
@@ -69,6 +77,12 @@ Environment variables:
 | --- | --- |
 | `TRACCIA_UVX_SPEC` | Override the `uvx --from` package spec, for example `traccia[document-markdown]`. |
 | `TRACCIA_USE_LOCAL_REPO=1` | Run the local checkout with `uv run traccia ...` instead of `uvx`. |
+| `TRACCIA_LLM_LEASE_PATH` | Override the cross-process LLM request lease path. |
+| `TRACCIA_VIEWER_FONT_DIR` | Override the viewer font asset directory. |
+| `OPENAI_API_KEY` | Default OpenAI-compatible backend credential. |
+| `CLIPROXYAPI_KEY` | Common OpenAI-compatible backend credential for CLIProxyAPI configs. |
+| `SUMMARIZE_WHISPER_CPP_BINARY` | Optional local transcription binary override. |
+| `SUMMARIZE_WHISPER_CPP_MODEL_PATH` | Optional local transcription model override. |
 
 ## Scripts
 
@@ -110,6 +124,8 @@ contracts for sources, evidence, skills, manifests, and config.
 | `.github/workflows/release.yml` | Release packaging workflow. |
 | `.github/workflows/security.yml` | Security-oriented workflow checks. |
 | `.github/dependabot.yml` | Dependency update configuration. |
+| `.github/pull_request_template.md` | Pull request checklist. |
+| `.github/ISSUE_TEMPLATE/*.yml` | Bug and feature request forms. |
 
 ## Documentation Files
 

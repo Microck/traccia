@@ -17,7 +17,7 @@ contracts.
 | [Exports and publishing](exports.md) | You want markdown, Obsidian, graph JSON, or the public viewer. |
 | [Architecture overview](architecture.md) | You want the system model and data flow. |
 | [Codebase map](codebase-map.md) | You are maintaining the repository and need module ownership. |
-| [Repository inventory](repository-inventory.md) | You want the tracked file inventory and line-count audit. |
+| [Repository inventory](repository-inventory.md) | You want the tracked repository surface and audit commands. |
 | [Development guide](development.md) | You want to run tests, package the CLI, or work on the repo. |
 
 ## Deeper Records
@@ -34,6 +34,7 @@ but are not the best entry point for a new user.
 | [Plan](plan.md) | Original phased implementation plan. |
 | [Decisions](decisions.md) | Product and architecture decisions from planning. |
 | [References](references.md) | External project references and anti-references. |
+| [Changelog](../CHANGELOG.md) | User-facing release notes. |
 
 ## Mental Model
 

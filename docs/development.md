@@ -31,7 +31,7 @@ uv run pytest
 Run Ruff:
 
 ```bash
-uv run ruff check .
+uv run ruff check src tests
 ```
 
 The configured test path is `tests/`. Ruff targets Python 3.12 and uses a
@@ -98,11 +98,19 @@ redaction, update the corresponding docs and tests in the same patch.
 
 The source distribution includes:
 
+- `.env.example`
 - `.github/assets`
+- `.github/ISSUE_TEMPLATE`
+- `.github/pull_request_template.md`
+- `AGENTS.md`
+- `CHANGELOG.md`
+- `CODE_OF_CONDUCT.md`
 - `CODEOWNERS`
 - `CONTRIBUTING.md`
 - `LICENSE`
 - `README.md`
+- `SECURITY.md`
+- `SUPPORT.md`
 - `docs`
 - `npm`
 - `package.json`

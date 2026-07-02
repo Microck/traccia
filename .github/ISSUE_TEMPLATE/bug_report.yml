@@ -1,0 +1,49 @@
+name: Bug report
+description: Report something that is broken or surprising.
+title: "[bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach private archives, credentials, or generated private graph artifacts.
+  - type: input
+    id: version
+    attributes:
+      label: Traccia version or commit
+      placeholder: "0.1.0 or commit SHA"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: "OS, Python version, install path"
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The command or workflow that triggered the problem.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Use a synthetic fixture instead of private source data.
+    validations:
+      required: false

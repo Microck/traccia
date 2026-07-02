@@ -17,13 +17,15 @@ Run the same checks CI runs before opening or merging changes:
 
 ```bash
 uv run ruff check src tests
-uv run ruff format --check src tests
 uv run pytest -q
 uv build
+uvx twine check --strict dist/*
 npm pack --dry-run
 ```
 
 If a change touches dependencies, run `uv lock` and include the lockfile update.
+Keep repository-wide formatting sweeps in their own mechanical patch so review
+does not mix behavior changes with formatter churn.
 
 ## code expectations
 

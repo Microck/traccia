@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a focused improvement.
+title: "[feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user workflow is blocked or awkward today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the smallest useful behavior change.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Note any simpler workaround or reason it is not enough.
+    validations:
+      required: false
+  - type: textarea
+    id: data_safety
+    attributes:
+      label: Data safety notes
+      description: Call out any impact on raw archives, evidence, public exports, or credentials.
+    validations:
+      required: false

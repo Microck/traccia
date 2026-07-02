@@ -1,8 +1,9 @@
-"""Static viewer asset source strings for the Phase 1 public skill map viewer.
+"""Static viewer asset source strings for the public skill map viewer.
 
 These are kept as Python constants so the export is self-contained, ships
-inside the wheel, and needs no JS bundler. The viewer is vanilla JS + SVG
-per decision 17 (React Flow-style DOM/SVG nodes, not custom canvas/WebGL).
+inside the wheel, and needs no JS bundler. The viewer uses vanilla JS with a
+hybrid canvas + SVG renderer: canvas handles bulk graph drawing while SVG keeps
+labels, focus paths, and the accessible node set inspectable.
 """
 
 from __future__ import annotations

@@ -221,7 +221,8 @@ repo/
       rendering/
       review/
       storage/
-  prompts/
+  config/
+    prompts/
   tests/
     fixtures/
     golden/
