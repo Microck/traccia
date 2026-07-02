@@ -90,7 +90,7 @@ The config default is:
 
 ```yaml
 graph_scoring:
-  parallel_scores: 4
+  parallel_scores: 1
 ```
 
 This pool is deliberately narrower than running multiple scorer processes. The

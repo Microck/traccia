@@ -2035,7 +2035,7 @@ def test_ingest_dir_cli_rejects_invalid_parallel_extractions(tmp_path: Path) -> 
     )
 
     assert result.exit_code != 0
-    assert "parallel-extractions" in result.output
+    assert "1<=x<=16" in result.output
 
 
 def test_ingest_dir_parallel_extractions_preserve_results(tmp_path: Path) -> None:
