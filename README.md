@@ -4,6 +4,8 @@
 </div>
 
 <p align="center">
+  <img src="https://img.shields.io/npm/v/@microck/traccia?style=flat-square&color=000000" alt="npm version badge">
+  <img src="https://img.shields.io/npm/dt/@microck/traccia?style=flat-square&color=000000" alt="npm total downloads badge">
   <img src="https://img.shields.io/badge/python-3.12%2B-000000?style=flat-square" alt="python badge">
   <img src="https://img.shields.io/badge/license-MIT-000000?style=flat-square" alt="mit license badge">
 </p>
