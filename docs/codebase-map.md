@@ -18,11 +18,8 @@ tracked repository surface and audit commands, see
 | `.env.example` | Blank local environment variable template. |
 | `CHANGELOG.md` | User-facing release notes. |
 | `LICENSE` | MIT license. |
-| `SECURITY.md` | Vulnerability reporting policy. |
-| `SUPPORT.md` | Support and reproduction guidance. |
 | `CODE_OF_CONDUCT.md` | Collaboration expectations. |
 | `CONTRIBUTING.md` | Contributor workflow notes. |
-| `CODEOWNERS` | Repository ownership. |
 | `CLAUDE.md` | Claude-specific agent guidance for the project context. |
 | `.python-version` | Local Python version pin. |
 | `.gitignore` | Local ignore rules. |

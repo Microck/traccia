@@ -55,13 +55,10 @@ PY
 | `AGENTS.md` | Harness-agnostic coding-agent instructions. |
 | `CHANGELOG.md` | User-facing release notes. |
 | `CLAUDE.md` | Claude-specific project context. |
-| `CODEOWNERS` | Repository ownership. |
 | `CODE_OF_CONDUCT.md` | Collaboration expectations. |
 | `CONTRIBUTING.md` | Contributor workflow notes. |
 | `LICENSE` | MIT license. |
 | `README.md` | Short product overview and docs entry point. |
-| `SECURITY.md` | Vulnerability reporting policy. |
-| `SUPPORT.md` | Support and reproduction guidance. |
 | `package.json` | npm launcher package metadata. |
 | `pyproject.toml` | Python package, dependency, build, test, and lint metadata. |
 | `uv.lock` | Locked Python dependency graph. |
