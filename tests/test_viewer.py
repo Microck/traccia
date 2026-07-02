@@ -3181,6 +3181,12 @@ def test_viewer_js_canvas_click_does_hit_test(tmp_path: Path) -> None:
     assert "var bestPriority = -Infinity" in hit_block
     assert "bestDist = dist" in hit_block
     assert "dist / hitPriority" not in hit_block
+    click_body = js.split('// Click empty canvas: hit-test for canvas-only nodes, else deselect.', 1)[
+        1
+    ].split("    // Wheel zoom", 1)[0]
+    assert "var hitId = hitTestNode(e.clientX, e.clientY)" in click_body
+    assert "deselectNode();" in click_body
+    assert 'e.target === dom.canvas || e.target === dom.graph_svg' not in click_body
 
 
 def test_viewer_css_maintains_black_graphite_palette(tmp_path: Path) -> None:

@@ -7980,11 +7980,10 @@ VIEWER_JS = """\
         return;
       }
 
-      // Empty space click: deselect.
-      if (e.target === dom.canvas || e.target === dom.graph_svg ||
-          e.target === dom.graph_canvas || e.target.tagName === "svg") {
-        deselectNode();
-      }
+      // Empty graph clicks can land on SVG groups, focus-path edges, or the
+      // hover ring. Once hit-testing misses a node, any remaining graph target
+      // is background and should clear the committed focus.
+      deselectNode();
     });
 
     // Wheel zoom
@@ -10450,7 +10449,7 @@ ADMIN_VIEWER_JS = """\
       dom.canvas.classList.remove("panning");
     });
     dom.canvas.addEventListener("click", function (e) {
-      if (e.target === dom.canvas || e.target === dom.graph_svg) deselectNode();
+      if (!e.target.closest(".graph-node")) deselectNode();
     });
     dom.canvas.addEventListener("wheel", function (e) {
       e.preventDefault();
