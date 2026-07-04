@@ -14,19 +14,20 @@
   <img width="800" height="auto" alt="traccia exported skill map animation" src=".github/assets/traccia-loop-squircle.gif" />
 </p>
 
-`traccia` turns personal archives into a skill graph that can explain itself.
-feed it notes, code, docs, AI chats, exported platform data, and the usual pile
-of half-structured personal history. it keeps the source files untouched,
-extracts evidence with timestamps, and renders a graph that shows where a skill
-came from, how deep it looks, how current it is, and how central it is to the
-broader archive.
+`traccia` is a tool that turns your personal archive into a self-explaining skill
+graph. it takes as input notes, code, docs, ai chat transcripts, export files from
+other platforms, or just your half-structured personal history and leaves these
+source files untouched. out of them it extracts timestamped fragments of evidence,
+which it renders as a graph tracing how each skill has been acquired, how deeply
+explored it is, how recent any progress is, and how central it is to your ongoing
+work as seen in your archive.
 
-the project is built for mixed archives rather than one clean source of truth.
-that includes repo history, google activity, social profiles, AI conversation
-logs, and everything else that tends to accumulate around a real person over
-time. the point is not to pretend those signals mean the same thing. `traccia`
-keeps weak signals weak, strong evidence strong, and the trail visible enough
-to challenge later.
+it is built for working with mixed archives, not for single authoritative sources
+such as a single git repo. at its best, it can pull from a broad mix of inputs such
+as repo history, google activity, social profiles and ai conversation logs. it
+avoids the trap of pretending all signals are equally valid but keeps all weak
+signals weak, strong evidence strong, and leaves the trail visible so you can
+question anything later.
 
 ## quick start
 
