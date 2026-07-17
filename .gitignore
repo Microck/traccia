@@ -21,6 +21,12 @@ npm-debug.log*
 # database state, and live API/proxy configuration from E2E testing.
 tmp/
 
+# Local graph state and generated viewer exports contain personal skill
+# data and binary font assets. The canonical viewer source lives in
+# src/traccia/viewer_assets.py and is materialized via `traccia export viewer`.
+graph/
+exports/
+
 # Local credentials and machine-specific runtime state.
 .env
 .env.*

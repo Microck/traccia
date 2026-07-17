@@ -15,12 +15,19 @@ VIEWER_HTML = """\
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark light">
+<meta name="description" content="Traccia Skill Map: an interactive force-directed graph of skills, areas, confidence, and evidence freshness.">
+<meta name="theme-color" content="#16191f" media="(prefers-color-scheme: dark)">
+<meta property="og:title" content="Traccia Skill Map">
+<meta property="og:description" content="An interactive force-directed graph of skills, areas, confidence, and evidence freshness.">
+<meta property="og:type" content="website">
 <title>Skill Map</title>
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="stylesheet" href="assets/viewer.css?v=20260629-tutorial-1">
 <link rel="preload" href="graph.json?v=20260629-tutorial-1" as="fetch" crossorigin>
 </head>
 <body class="viewer-loading">
+
+<a class="skip-link" href="#viewport">Skip to skill graph</a>
 
 <!-- Floating game-map HUD: compact islands, not full-width bars -->
 
@@ -210,6 +217,7 @@ VIEWER_HTML = """\
 
 <!-- Main graph viewport -->
 <main class="viewport" id="viewport" role="main" aria-label="Skill graph">
+  <h1 class="sr-only">Skill Map</h1>
   <div class="viewport__canvas" id="canvas">
     <div id="graph-camera" class="graph-camera">
       <!-- Canvas raster layer: renders all node glyphs and bulk edges as pixels.
@@ -362,7 +370,7 @@ VIEWER_CSS = """\
   --border: oklch(0.241 0.008 285.819);
   --border-strong: oklch(0.303 0.009 285.856);
   --text: oklch(0.934 0.012 91.522);
-  --text-muted: oklch(0.671 0.017 86.449);
+  --text-muted: oklch(0.71 0.017 86.449);
   --text-dim: oklch(0.455 0.011 78.217);
   --accent: oklch(0.529 0.07 178.573);
   --accent-soft: oklch(0.529 0.07 178.573 / 0.16);
@@ -436,8 +444,51 @@ html, body {
   color: var(--text);
   background: var(--bg);
   font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+  font-synthesis: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Visually hidden but available to screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Keyboard-only skip link to jump past the floating HUD into the graph. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 9999;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-decoration: none;
+  transform: translateY(-150%);
+  transition: transform 120ms ease-out;
+}
+.skip-link:focus {
+  transform: translateY(0);
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+/* Brand the selection color and keep it legible against the dark surface. */
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
 }
 
 body {
@@ -620,6 +671,14 @@ body {
     transform var(--motion-press-dur) var(--motion-ease-out);
 }
 .hud-btn:active { transform: scale(0.96); }
+/* Extend the tap target to the 40px desktop floor without enlarging the icon. */
+.hud-btn::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  z-index: -1;
+  border-radius: inherit;
+}
 .hud-btn:not(.hud-btn--sound)[aria-pressed="true"] { color: var(--accent-strong); background: transparent; }
 .hud-btn--sound[aria-pressed="false"] { color: var(--accent-strong); background: transparent; }
 .hud-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -9053,6 +9112,7 @@ ADMIN_VIEWER_HTML = """\
 
 <!-- Main graph viewport -->
 <main class="viewport" id="viewport" role="main" aria-label="Skill graph">
+  <h1 class="sr-only">Skill Map</h1>
   <div class="viewport__canvas" id="canvas">
     <!-- Not aria-hidden: nodes and domain labels inside are keyboard
          focusable (decisions 39, 34) with aria-labels, so hiding the SVG
@@ -9129,7 +9189,7 @@ ADMIN_VIEWER_CSS = """\
   --border: #232c3a;
   --border-strong: #2f3a4d;
   --text: #e4e9f0;
-  --text-muted: #8a95a8;
+  --text-muted: #9aa6ba;
   --text-dim: #5a6478;
   --accent: #6cb6ff;
   --accent-soft: rgba(108, 182, 255, 0.15);
