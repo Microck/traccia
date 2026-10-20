@@ -4,6 +4,9 @@ All notable user-facing changes to Traccia are tracked here.
 
 ## 0.1.2
 
+- Require pypdf 6.21.1 or later and refresh the lockfile to address the PDF
+  parser vulnerabilities reported by the release dependency audit.
+
 - Pin the npm launcher to this project's matching GitHub wheel instead of the
   unrelated package occupying the bare `traccia` name on PyPI.
 - Publish the GitHub wheel before npm, and disable the inapplicable PyPI job.
