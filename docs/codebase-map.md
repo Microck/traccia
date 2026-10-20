@@ -66,7 +66,7 @@ tracked repository surface and audit commands, see
 
 | File | Purpose |
 | --- | --- |
-| `npm/bin/traccia.js` | Node launcher that runs `uvx --from traccia traccia ...`; maintainer mode uses `TRACCIA_USE_LOCAL_REPO=1` to run `uv run traccia ...` from a checkout. |
+| `npm/bin/traccia.js` | Node launcher that runs `uvx --from <matching GitHub release wheel> traccia ...`; maintainer mode uses `TRACCIA_USE_LOCAL_REPO=1` to run `uv run traccia ...` from a checkout. |
 
 Environment variables:
 

@@ -72,13 +72,13 @@ def test_npm_wrapper_allows_custom_uvx_spec(tmp_path: Path) -> None:
         tmp_path,
         "uvx",
         args=["ingest-dir", "archive"],
-        extra_env={"TRACCIA_UVX_SPEC": "traccia[document-markdown]"},
+        extra_env={"TRACCIA_UVX_SPEC": ".[document-markdown]"},
     )
 
     assert completed.returncode == 0
     assert trace["argv"] == [
         "--from",
-        "traccia[document-markdown]",
+        ".[document-markdown]",
         "traccia",
         "ingest-dir",
         "archive",
