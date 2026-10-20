@@ -16,8 +16,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v8.2.0
-      - uses: actions/setup-python@v6
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -33,6 +33,9 @@ jobs:
         working-directory: tests/browser
       - run: npm test
         working-directory: tests/browser
+      - name: Report synthetic browser failure evidence
+        if: failure()
+        run: find tests/browser/.e2e -name trace.md -exec cat {} +
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

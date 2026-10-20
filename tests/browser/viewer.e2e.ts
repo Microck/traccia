@@ -38,6 +38,12 @@ test('admin nodes are operable from the keyboard',async({app,browser,screen})=>{
  await expect(screen.getByRole('heading',{name:fixture.adminNode.name,exact:true})).toBeVisible();
  await screen.getByRole('button',{name:'Close drawer (Esc)',exact:true}).click();
  await expect(browser.locator('#drawer')).not.toBeVisible();
+ expect(await browser.evaluate(()=>document.activeElement?.getAttribute('data-id')??null)).toBe(fixture.adminNode.id);
+ await screen.getByRole('button',{name:fixture.adminNode.name,exact:true}).press(' ');
+ await expect(browser.locator('#drawer')).toBeVisible();
+ await screen.getByRole('button',{name:'Close drawer (Esc)',exact:true}).press('Escape');
+ await expect(browser.locator('#drawer')).not.toBeVisible();
+ expect(await browser.evaluate(()=>document.activeElement?.getAttribute('data-id')??null)).toBe(fixture.adminNode.id);
 });
 
 test('admin drawer stays open after immediate close and reopen',async({app,browser,screen})=>{

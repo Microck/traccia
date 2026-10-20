@@ -9530,6 +9530,9 @@ body.viewer-loading .viewport__canvas {
 .toast.toast--success { border-color: var(--success); color: var(--success); }
 .toast.toast--error { border-color: var(--danger); color: var(--danger); }
 
+/* Author display rules must not override the HTML hidden state. */
+[hidden] { display: none !important; }
+
 .empty-state, .loading-state {
   position: absolute; inset: 0;
   z-index: 45;
@@ -10197,12 +10200,20 @@ ADMIN_VIEWER_JS = """\
   }
 
   function closeDrawer() {
+    var returnFocusId = selectedNodeId;
+    var restoreFocus = dom.drawer.contains(document.activeElement);
     if (drawerCloseTimer !== null) clearTimeout(drawerCloseTimer);
     dom.drawer.classList.remove("open");
     drawerCloseTimer = setTimeout(function () {
       drawerCloseTimer = null;
       dom.drawer.setAttribute("aria-hidden", "true");
       dom.drawer.hidden = true;
+      if (restoreFocus && returnFocusId) {
+        var graphNode = Array.from(dom.graph_nodes.children).find(function (element) {
+          return element.getAttribute("data-id") === returnFocusId;
+        });
+        if (graphNode) graphNode.focus();
+      }
     }, 250);
     sfx.drawerClose();
   }
