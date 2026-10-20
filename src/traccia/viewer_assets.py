@@ -9701,6 +9701,8 @@ ADMIN_VIEWER_JS = """\
   var graphData = null;
   var viewerConfig = { enableSound: true, version: 1, mode: "admin" };
   var nodes = [];
+  var nodeById = new Map();
+  var drawerCloseTimer = null;
   var edges = [];
   var domains = [];
   var domainColorMap = {};
@@ -9812,7 +9814,9 @@ ADMIN_VIEWER_JS = """\
     });
 
     var domainSet = {};
+    nodeById = new Map();
     nodes.forEach(function (n) {
+      if (!nodeById.has(n.id)) nodeById.set(n.id, n);
       var d = extractDomain(n);
       n._domain = d;
       domainSet[d] = true;
@@ -10013,8 +10017,8 @@ ADMIN_VIEWER_JS = """\
       var toId = edge.to_skill_id || edge.toSkillId;
       if (!visibleNodeIds.has(fromId) || !visibleNodeIds.has(toId)) return;
       // Skip edges into collapsed domains (except domain header node)
-      var fromNode = nodes.find(function(n) { return n.id === fromId; });
-      var toNode = nodes.find(function(n) { return n.id === toId; });
+      var fromNode = nodeById.get(fromId);
+      var toNode = nodeById.get(toId);
       if (fromNode && isDomainCollapsed(fromNode._domain) && fromNode.kind !== "domain") return;
       if (toNode && isDomainCollapsed(toNode._domain) && toNode.kind !== "domain") return;
 
@@ -10047,6 +10051,9 @@ ADMIN_VIEWER_JS = """\
       var g = document.createElementNS(ns, "g");
       g.setAttribute("class", buildNodeClass(node));
       g.setAttribute("data-id", node.id);
+      g.setAttribute("role", "button");
+      g.setAttribute("tabindex", "0");
+      g.setAttribute("aria-label", node.name || node.id);
       g.setAttribute("transform", "translate(" + p.x + "," + p.y + ")");
       if (selectedNodeId === node.id) g.classList.add("selected");
 
@@ -10086,6 +10093,13 @@ ADMIN_VIEWER_JS = """\
       g.addEventListener("click", function (e) {
         e.stopPropagation();
         selectNode(node.id);
+      });
+      g.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        e.preventDefault();
+        e.stopPropagation();
+        selectNode(node.id);
+        dom.drawer_close.focus();
       });
 
       dom.graph_nodes.appendChild(g);
@@ -10169,7 +10183,8 @@ ADMIN_VIEWER_JS = """\
 
   // --- Drawer with curation controls ---
   function openDrawer(id) {
-    var node = nodes.find(function (n) { return n.id === id; });
+    if (drawerCloseTimer !== null) { clearTimeout(drawerCloseTimer); drawerCloseTimer = null; }
+    var node = nodeById.get(id);
     if (!node) return;
 
     dom.drawer_title.textContent = node.name || id;
@@ -10182,8 +10197,10 @@ ADMIN_VIEWER_JS = """\
   }
 
   function closeDrawer() {
+    if (drawerCloseTimer !== null) clearTimeout(drawerCloseTimer);
     dom.drawer.classList.remove("open");
-    setTimeout(function () {
+    drawerCloseTimer = setTimeout(function () {
+      drawerCloseTimer = null;
       dom.drawer.setAttribute("aria-hidden", "true");
       dom.drawer.hidden = true;
     }, 250);

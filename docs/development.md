@@ -117,3 +117,32 @@ The source distribution includes:
 
 The build excludes local caches, virtual environments, `dist`, scripts, and
 temporary project outputs.
+
+## Deterministic viewer browser QA
+
+The private package under `tests/browser/` runs tester-army/e2e against actual
+static viewer exports. It requires Node 24.8 or newer; the published npm
+launcher's Node 18 floor is unchanged.
+
+```bash
+uv sync --locked --dev
+uv run python tests/browser/seed.py
+npm ci --prefix tests/browser
+npm run check --prefix tests/browser
+cd tests/browser
+npx --no-install e2e-web install chromium --with-deps
+npm test
+```
+
+The seed runs the real CLI against the repository's synthetic corpus using the
+built-in fake extraction backend. It exports public, admin, and redacted bundles
+without reading personal archives or calling a model/provider. The tests cover
+public search/panels at desktop and mobile sizes, physical public-data redaction,
+admin keyboard selection, interrupted drawer closing, and real curation JSON
+downloads. `.fixture/` and `.e2e/` are disposable ignored outputs. CI uploads
+browser traces for diagnosis; this is not live-provider extraction acceptance.
+
+`node tests/browser/lookup-benchmark.mjs` compares the old linear endpoint lookup
+with the indexed lookup, including index construction and duplicate-ID
+first-match equivalence. It is a focused lookup benchmark, not a claim about
+whole-viewer frame time or ingestion speed.
