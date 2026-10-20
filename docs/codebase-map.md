@@ -66,13 +66,13 @@ tracked repository surface and audit commands, see
 
 | File | Purpose |
 | --- | --- |
-| `npm/bin/traccia.js` | Node launcher that runs `uvx --from traccia traccia ...`; maintainer mode uses `TRACCIA_USE_LOCAL_REPO=1` to run `uv run traccia ...` from a checkout. |
+| `npm/bin/traccia.js` | Node launcher that runs `uvx --from <matching GitHub release wheel> traccia ...`; maintainer mode uses `TRACCIA_USE_LOCAL_REPO=1` to run `uv run traccia ...` from a checkout. |
 
 Environment variables:
 
 | Variable | Meaning |
 | --- | --- |
-| `TRACCIA_UVX_SPEC` | Override the `uvx --from` package spec, for example `traccia[document-markdown]`. |
+| `TRACCIA_UVX_SPEC` | Override the `uvx --from` package spec, for example `.[document-markdown]` from this checkout; by default the matching GitHub release wheel is used. |
 | `TRACCIA_USE_LOCAL_REPO=1` | Run the local checkout with `uv run traccia ...` instead of `uvx`. |
 | `TRACCIA_LLM_LEASE_PATH` | Override the cross-process LLM request lease path. |
 | `TRACCIA_VIEWER_FONT_DIR` | Override the viewer font asset directory. |

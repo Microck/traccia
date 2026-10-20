@@ -74,7 +74,7 @@ jobs:
     if: vars.NPM_PUBLISH == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: build
+    needs: [build, github-release]
 
     steps:
       - name: Checkout
@@ -93,25 +93,3 @@ jobs:
         run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  publish-pypi:
-    if: vars.PYPI_PUBLISH == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: build
-    permissions:
-      contents: read
-      id-token: write
-    environment:
-      name: pypi
-      url: https://pypi.org/p/traccia
-
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: python-package-distributions
-          path: dist
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1

@@ -37,7 +37,9 @@ install with npm:
 npm install -g @microck/traccia
 ```
 
-the npm wrapper requires `uvx` on `PATH`.
+the npm wrapper requires `uvx` on `PATH` and downloads this project's matching
+versioned wheel from GitHub Releases. the bare `traccia` name on PyPI belongs to
+another project: do not use `pip install traccia` or `uvx traccia` for this CLI.
 
 or install the Python CLI from a checkout:
 
