@@ -1,0 +1,45 @@
+name: Synthetic viewer browser flows
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: browser-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.8.0'
+      - run: uv sync --locked --dev
+      - run: uv run python tests/browser/seed.py
+      - run: npm ci
+        working-directory: tests/browser
+      - run: npm run check
+        working-directory: tests/browser
+      - run: npx --no-install e2e-web install chromium --with-deps
+        working-directory: tests/browser
+      - run: npm test
+        working-directory: tests/browser
+      - name: Report synthetic browser failure evidence
+        if: failure()
+        run: find tests/browser/.e2e -name trace.md -exec cat {} +
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: synthetic-viewer-browser-evidence
+          path: tests/browser/.e2e/
+          include-hidden-files: true
+          retention-days: 7

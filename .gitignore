@@ -47,3 +47,8 @@ scripts/traccia-watchdog.py
 # dora code context index
 .dora/
 .residue/
+
+# Isolated browser QA dependencies, synthetic exports and traces.
+tests/browser/node_modules/
+tests/browser/.fixture/
+tests/browser/.e2e/
