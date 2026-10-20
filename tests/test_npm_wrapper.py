@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+RELEASE_SPEC = "https://github.com/Microck/traccia/releases/download/v0.1.2/traccia-0.1.2-py3-none-any.whl"
 WRAPPER_PATH = REPO_ROOT / "npm" / "bin" / "traccia.js"
 
 
@@ -63,7 +64,7 @@ def test_npm_wrapper_uses_uvx_by_default(tmp_path: Path) -> None:
     completed, trace = _run_wrapper(tmp_path, "uvx", args=["doctor", "."])
 
     assert completed.returncode == 0
-    assert trace["argv"] == ["--from", "traccia", "traccia", "doctor", "."]
+    assert trace["argv"] == ["--from", RELEASE_SPEC, "traccia", "doctor", "."]
 
 
 def test_npm_wrapper_allows_custom_uvx_spec(tmp_path: Path) -> None:
@@ -106,4 +107,4 @@ def test_npm_wrapper_propagates_subprocess_exit_codes(tmp_path: Path) -> None:
     )
 
     assert completed.returncode == 23
-    assert trace["argv"] == ["--from", "traccia", "traccia", "doctor", "."]
+    assert trace["argv"] == ["--from", RELEASE_SPEC, "traccia", "doctor", "."]

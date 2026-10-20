@@ -72,7 +72,7 @@ Environment variables:
 
 | Variable | Meaning |
 | --- | --- |
-| `TRACCIA_UVX_SPEC` | Override the `uvx --from` package spec, for example `traccia[document-markdown]`. |
+| `TRACCIA_UVX_SPEC` | Override the `uvx --from` package spec, for example `.[document-markdown]` from this checkout; by default the matching GitHub release wheel is used. |
 | `TRACCIA_USE_LOCAL_REPO=1` | Run the local checkout with `uv run traccia ...` instead of `uvx`. |
 | `TRACCIA_LLM_LEASE_PATH` | Override the cross-process LLM request lease path. |
 | `TRACCIA_VIEWER_FONT_DIR` | Override the viewer font asset directory. |

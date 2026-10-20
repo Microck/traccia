@@ -9,7 +9,11 @@ const args = process.argv.slice(2);
 const packageRoot = path.resolve(__dirname, "..", "..");
 const wantsLocalRepo = process.env.TRACCIA_USE_LOCAL_REPO === "1";
 const configuredSpec = process.env.TRACCIA_UVX_SPEC;
-const uvxSpec = configuredSpec && configuredSpec.trim() ? configuredSpec.trim() : "traccia";
+const { version } = require(path.join(packageRoot, "package.json"));
+// The bare PyPI name belongs to another project. Resolve only our matching
+// GitHub release unless the caller explicitly selects another package spec.
+const releaseSpec = `https://github.com/Microck/traccia/releases/download/v${version}/traccia-${version}-py3-none-any.whl`;
+const uvxSpec = configuredSpec && configuredSpec.trim() ? configuredSpec.trim() : releaseSpec;
 
 function fail(message) {
   process.stderr.write(`${message}\n`);

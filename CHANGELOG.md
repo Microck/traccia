@@ -2,7 +2,11 @@
 
 All notable user-facing changes to Traccia are tracked here.
 
-## Unreleased
+## 0.1.2
+
+- Pin the npm launcher to this project's matching GitHub wheel instead of the
+  unrelated package occupying the bare `traccia` name on PyPI.
+- Publish the GitHub wheel before npm, and disable the inapplicable PyPI job.
 
 - Make admin graph nodes keyboard-operable and keep a newly reopened drawer
   visible when an earlier closing animation finishes.

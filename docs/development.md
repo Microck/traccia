@@ -60,7 +60,9 @@ Optional extras:
 ## npm Wrapper
 
 The npm package is `@microck/traccia`. It does not contain a JavaScript
-implementation of Traccia. It launches the Python CLI through `uvx`:
+implementation of Traccia. It launches the Python CLI through `uvx --from`
+using the matching versioned wheel from `Microck/traccia` GitHub Releases.
+The bare PyPI name belongs to an unrelated project and must not be the default:
 
 ```bash
 npx @microck/traccia doctor .
@@ -75,7 +77,7 @@ TRACCIA_USE_LOCAL_REPO=1 node npm/bin/traccia.js doctor .
 To test a different Python package spec:
 
 ```bash
-TRACCIA_UVX_SPEC='traccia[document-markdown]' npx @microck/traccia doctor .
+TRACCIA_UVX_SPEC='.[document-markdown]' npx @microck/traccia doctor .
 ```
 
 ## High-Risk Areas
@@ -146,3 +148,13 @@ browser traces for diagnosis; this is not live-provider extraction acceptance.
 with the indexed lookup, including index construction and duplicate-ID
 first-match equivalence. It is a focused lookup benchmark, not a claim about
 whole-viewer frame time or ingestion speed.
+
+### Publication order
+
+Keep Python metadata, `__version__`, and npm versions aligned. Tag the reviewed
+commit as `v<version>`. The release workflow tests and builds the Python wheel,
+publishes it to GitHub Releases, then optionally publishes npm when the existing
+`NPM_PUBLISH` configuration permits it. The npm launcher must not be published
+before its matching wheel is downloadable. This repository does not publish to
+the unrelated `traccia` project on PyPI. Verify a fresh install from the GitHub
+wheel and the packed npm wrapper before considering the release delivered.
